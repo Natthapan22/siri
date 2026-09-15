@@ -143,6 +143,7 @@ try {
 
     Write-Log "Starting $python $main"
     Start-Process -FilePath $python -ArgumentList @($main) -WorkingDirectory $Root
+    exit 0
 } catch {
     Write-Log $_.Exception.Message
     Show-Msg "เกิดข้อผิดพลาด:`n$($_.Exception.Message)" "Error"

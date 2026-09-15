@@ -1,5 +1,5 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run.ps1"
-if errorlevel 1 pause
+REM เปิดแบบเงียบ ไม่ค้างที่ Press any key — error โชว์เป็น MessageBox จาก run.ps1
+start "" /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0run.ps1"
+exit
