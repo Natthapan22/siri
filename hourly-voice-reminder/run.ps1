@@ -1,10 +1,11 @@
-﻿# Auto-find or install Python, then run main.py (Windows)
+﻿# Auto-find or install Python+tkinter, then open UI (Windows)
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $Root
-$Log = Join-Path $Root "logs"
-New-Item -ItemType Directory -Force -Path $Log | Out-Null
-$LogFile = Join-Path $Log "launch.log"
+$LogDir = Join-Path $Root "logs"
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$LogFile = Join-Path $LogDir "launch.log"
+$BootFile = Join-Path $LogDir "ui-boot.txt"
 
 function Write-Log([string]$Msg) {
     $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Msg
@@ -24,7 +25,7 @@ function Test-PythonTk([string]$Exe) {
     if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
     if ($Exe -like "*\WindowsApps\*") { return $false }
     try {
-        $p = Start-Process -FilePath $Exe -ArgumentList @("-c", "import sys") `
+        $p = Start-Process -FilePath $Exe -ArgumentList @("-c", "import tkinter; tkinter.Tk().destroy()") `
             -Wait -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput "$env:TEMP\hvr-out.txt" `
             -RedirectStandardError "$env:TEMP\hvr-err.txt"
@@ -63,7 +64,10 @@ function Find-Python {
             $resolved = & py -3 -c "import sys; print(sys.executable)" 2>$null
             if ($resolved) {
                 $exe = ($resolved | Select-Object -First 1).ToString().Trim()
-                if ($exe -and (Test-PythonTk $exe)) { return $exe }
+                $dir = [IO.Path]::GetDirectoryName($exe)
+                $w = Join-Path $dir "pythonw.exe"
+                if (Test-PythonTk $w) { return $w }
+                if (Test-PythonTk $exe) { return $exe }
             }
         } catch {}
     }
@@ -76,7 +80,7 @@ function Install-Python {
     $url = "https://www.python.org/ftp/python/$ver/$name"
     $tmp = Join-Path $env:TEMP $name
 
-    Show-Msg "ไม่พบ Python — จะติดตั้งให้อัตโนมัติ (ครั้งแรก 1-3 นาที ต้องมีเน็ต)"
+    Show-Msg "ไม่พบ Python — จะติดตั้งให้อัตโนมัติ (ครั้งแรก 1-3 นาที ต้องมีเน็ต)`nจากนั้นจะเปิดหน้าต่างตั้งค่า"
 
     Write-Log "Downloading $url"
     try {
@@ -87,7 +91,7 @@ function Install-Python {
         exit 1
     }
 
-    Write-Log "Installing silently"
+    Write-Log "Installing silently with tcl/tk"
     $args = @(
         "/quiet", "InstallAllUsers=0", "PrependPath=1",
         "Include_tcltk=1", "Include_pip=1", "Include_test=0",
@@ -98,16 +102,15 @@ function Install-Python {
 
     if ($null -eq $p -or $p.ExitCode -ne 0) {
         $code = if ($p) { $p.ExitCode } else { "?" }
-        Show-Msg "ติดตั้ง Python ไม่สำเร็จ (exit $code)`nลองติดตั้งเองจาก python.org แล้วติ๊ก Add to PATH" "Error"
+        Show-Msg "ติดตั้ง Python ไม่สำเร็จ (exit $code)`nติดตั้งเองจาก python.org แล้วติ๊ก Add to PATH + tcl/tk" "Error"
         exit 1
     }
 
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                 [Environment]::GetEnvironmentVariable("Path", "User")
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 3
 }
 
-# --- main ---
 try {
     $main = Join-Path $Root "main.py"
     if (-not (Test-Path -LiteralPath $main)) {
@@ -115,7 +118,6 @@ try {
         exit 1
     }
 
-    # Prefer ready-made exe
     foreach ($exeName in @("HourlyVoiceReminder.exe", "dist\HourlyVoiceReminder.exe")) {
         $exePath = Join-Path $Root $exeName
         if (Test-Path -LiteralPath $exePath) {
@@ -131,18 +133,56 @@ try {
         $python = Find-Python
     }
     if (-not $python) {
-        Show-Msg "ติดตั้งแล้วแต่ยังหา Python ไม่เจอ — ลองปิดแล้วเปิด เปิดแอป.bat ใหม่ หรือรีสตาร์ทเครื่อง" "Warning"
+        Show-Msg "ยังหา Python + tkinter ไม่เจอ`nปิดแล้วเปิด เปิดแอป.bat ใหม่ หรือรีสตาร์ทเครื่อง" "Warning"
         exit 1
     }
 
+    # Prefer pythonw so no black console — but only if tkinter works
     $dir = [IO.Path]::GetDirectoryName($python)
     $pythonw = Join-Path $dir "pythonw.exe"
     if ((Test-Path -LiteralPath $pythonw) -and (Test-PythonTk $pythonw)) {
         $python = $pythonw
+    } else {
+        $pythonExe = Join-Path $dir "python.exe"
+        if ((Test-Path -LiteralPath $pythonExe) -and (Test-PythonTk $pythonExe)) {
+            $python = $pythonExe
+        }
     }
 
-    Write-Log "Starting $python $main"
-    Start-Process -FilePath $python -ArgumentList @($main) -WorkingDirectory $Root
+    Remove-Item -LiteralPath $BootFile -Force -ErrorAction SilentlyContinue
+    Write-Log "Starting UI: $python $main"
+    # Do NOT use -WindowStyle Hidden here — it can hide the tkinter window
+    $proc = Start-Process -FilePath $python -ArgumentList @($main) -WorkingDirectory $Root -PassThru
+    if (-not $proc) {
+        Show-Msg "เปิดโปรแกรมไม่สำเร็จ" "Error"
+        exit 1
+    }
+
+    $booted = $false
+    for ($i = 0; $i -lt 25; $i++) {
+        Start-Sleep -Milliseconds 400
+        if (Test-Path -LiteralPath $BootFile) {
+            $txt = Get-Content -LiteralPath $BootFile -Raw -ErrorAction SilentlyContinue
+            if ($txt -match "UI mainloop running") {
+                $booted = $true
+                break
+            }
+            if ($txt -match "Tk failed") {
+                Show-Msg "เปิด UI ไม่สำเร็จ`n$txt" "Error"
+                exit 1
+            }
+        }
+        if ($proc.HasExited) {
+            $detail = ""
+            if (Test-Path -LiteralPath $BootFile) { $detail = Get-Content -LiteralPath $BootFile -Raw }
+            Show-Msg "โปรแกรมปิดทันที (exit $($proc.ExitCode))`n$detail`nดู logs\launch.log" "Error"
+            exit 1
+        }
+    }
+
+    if (-not $booted) {
+        Write-Log "warning: no UI boot confirmation yet; pid=$($proc.Id)"
+    }
     exit 0
 } catch {
     Write-Log $_.Exception.Message
