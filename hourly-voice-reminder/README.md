@@ -7,15 +7,19 @@
 | **Mac** | **`เปิดแอป.command`** |
 | **Windows** | **`เปิดแอป.bat`** |
 
-### Windows — flow อัตโนมัติ
-1. ตรวจ Python 3.12 + tkinter
-2. ถ้าไม่มี → ดาวน์โหลดติดตั้ง Python 3.12.7 ให้ (ต้องมีเน็ต ครั้งแรก 1–3 นาที)
-3. เปิดหน้าต่าง UI (เหมือน Mac)
+### Windows — ในไฟล์ `.bat` มีคำสั่งติดตั้ง Python อยู่แล้ว
+
+```bat
+curl -L -o "%TEMP%\python-3.12.7-amd64.exe" https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe
+
+"%TEMP%\python-3.12.7-amd64.exe" /quiet InstallAllUsers=0 PrependPath=1 Include_tcltk=1 Include_pip=1 Include_launcher=1 AssociateFiles=0 Shortcuts=0
+```
+
+Flow: ตรวจ Python → ไม่มีก็ติดตั้ง 3.12.7 → เปิดหน้า UI
 
 ### ในหน้า UI
 - กรอกข้อความ + **เทสเสียง**
 - ติ๊กชั่วโมง 00–23 (เริ่มต้นติ๊กครบ)
 - **เริ่ม** / **หยุด**
-- บันทึกอัตโนมัติ → `config.json`
 
 Log: `logs/`
