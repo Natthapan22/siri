@@ -4,6 +4,6 @@ Monorepo สำหรับโปรเจกต์ automation / voice / reminde
 
 ## โปรเจกต์
 
-| โฟลเดอร์ | คำอธิบาย |
-|----------|-----------|
-| [hourly-voice-reminder](./hourly-voice-reminder) | แจ้งเตือนด้วยเสียงทุกชั่วโมง (macOS + Windows) |
+| โฟลเดอร์ | เปิดใช้ |
+|----------|---------|
+| [hourly-voice-reminder](./hourly-voice-reminder) | Windows: `เปิดแอป.bat` · Mac: `เปิดแอป.app` |
