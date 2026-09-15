@@ -167,24 +167,54 @@ try {
         exit 1
     }
 
+    # Prefer pythonw for GUI without console — do NOT use -WindowStyle Hidden
+    # (Hidden can hide the tkinter window on Windows)
     $dir = [IO.Path]::GetDirectoryName($python)
     $pythonw = Join-Path $dir "pythonw.exe"
     if ((Test-Path -LiteralPath $pythonw) -and (Test-PythonTk $pythonw)) {
         $python = $pythonw
+    } else {
+        $pythonExe = Join-Path $dir "python.exe"
+        if ((Test-Path -LiteralPath $pythonExe) -and (Test-PythonTk $pythonExe)) {
+            $python = $pythonExe
+        }
     }
 
     Write-Log "Launching: $python $main"
-    # Use ArgumentList as array — avoid quote bugs with Thai paths
-    $proc = Start-Process -FilePath $python -ArgumentList @($main) -WorkingDirectory $Root -PassThru
+    $proc = Start-Process -FilePath $python `
+        -ArgumentList @($main) `
+        -WorkingDirectory $Root `
+        -PassThru
     if (-not $proc) {
         Show-Error "เปิดโปรแกรมไม่สำเร็จ`nPython: $python`nดูรายละเอียดใน launch-error.txt"
         exit 1
     }
-    # If it crashes immediately, wait briefly and check
-    Start-Sleep -Milliseconds 800
-    if ($proc.HasExited -and $proc.ExitCode -ne 0) {
-        Show-Error "โปรแกรมปิดทันที (exit $($proc.ExitCode))`nดู launch-error.txt หรือรัน: python main.py ใน Command Prompt เพื่อดู error"
-        exit 1
+
+    $booted = $false
+    for ($i = 0; $i -lt 25; $i++) {
+        Start-Sleep -Milliseconds 400
+        if (Test-Path -LiteralPath $LogPath) {
+            $txt = Get-Content -LiteralPath $LogPath -Raw -ErrorAction SilentlyContinue
+            if ($txt -and ($txt -match "UI mainloop running")) {
+                $booted = $true
+                break
+            }
+            if ($txt -and ($txt -match "Traceback|Exception")) {
+                Show-Error "เปิด UI ไม่สำเร็จ`n$txt"
+                exit 1
+            }
+        }
+        if ($proc.HasExited) {
+            $detail = ""
+            if (Test-Path -LiteralPath $LogPath) {
+                $detail = Get-Content -LiteralPath $LogPath -Raw
+            }
+            Show-Error "โปรแกรมปิดทันที (exit $($proc.ExitCode))`n$detail`n`nลองรันใน Command Prompt:`ncd /d `"$Root`"`npython main.py"
+            exit 1
+        }
+    }
+    if (-not $booted) {
+        Write-Log "warning: no boot confirmation yet; running=$(-not $proc.HasExited)"
     }
 } catch {
     Show-Error "เกิดข้อผิดพลาด:`n$($_.Exception.Message)`n`nรายละเอียดบันทึกใน launch-error.txt"

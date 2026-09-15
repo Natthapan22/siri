@@ -376,14 +376,70 @@ class ReminderApp:
         self.root.destroy()
 
 
+def _bring_to_front(root: tk.Tk) -> None:
+    """ให้หน้าต่างโผล่ข้างหน้า หลังดับเบิลคลิกเปิดแอป"""
+    try:
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+        # ชั่วคราว topmost แล้วคืน — ดึงขึ้นจากหลังหน้าต่างอื่น
+        root.attributes("-topmost", True)
+        root.after(400, lambda: root.attributes("-topmost", False))
+        if sys.platform == "darwin":
+            # ให้ macOS โฟกัสโปรเซส Python
+            try:
+                subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        'tell application "System Events" to set frontmost of first process whose unix id is '
+                        + str(os.getpid())
+                        + " to true",
+                    ],
+                    capture_output=True,
+                    timeout=2,
+                )
+            except Exception:
+                pass
+        elif sys.platform == "win32":
+            root.wm_attributes("-topmost", 1)
+            root.after(400, lambda: root.wm_attributes("-topmost", 0))
+    except tk.TclError:
+        pass
+
+
+def _write_boot_log(msg: str) -> None:
+    log = Path(__file__).with_name("launch-error.txt")
+    try:
+        with log.open("a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] {msg}\n")
+    except OSError:
+        pass
+
+
 def main() -> int:
-    root = tk.Tk()
+    _write_boot_log(f"starting UI platform={sys.platform} python={sys.executable}")
+    try:
+        root = tk.Tk()
+    except Exception as exc:
+        _write_boot_log(f"Tk() failed: {exc}")
+        raise
+    _write_boot_log("Tk() ok")
+    root.title("Hourly Voice Reminder")
     try:
         root.tk.call("tk", "scaling", 1.2)
     except tk.TclError:
         pass
+    root.geometry("460x520+120+80")
+    root.minsize(420, 480)
+
+    _write_boot_log("building ReminderApp")
     ReminderApp(root)
+    _write_boot_log("ReminderApp ok")
+    root.after(200, lambda: _bring_to_front(root))
+    _write_boot_log("UI mainloop running")
     root.mainloop()
+    _write_boot_log("UI closed normally")
     return 0
 
 
