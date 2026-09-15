@@ -1,20 +1,52 @@
-# Hourly Voice Reminder — Windows one-click launcher
-# Finds Python+tkinter, or silently installs Python for current user, then opens UI.
+﻿# Hourly Voice Reminder — Windows one-click launcher
+# UTF-8 BOM recommended. Finds Python+tkinter, installs if missing, then opens UI.
 
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $Root
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location -LiteralPath $Root
+
+$LogPath = Join-Path $Root "launch-error.txt"
 $PythonVersion = "3.12.7"
 $InstallerName = "python-$PythonVersion-amd64.exe"
 $InstallerUrl = "https://www.python.org/ftp/python/$PythonVersion/$InstallerName"
 
+function Write-Log([string]$Msg) {
+    $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Msg
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+}
+
+function Show-Error([string]$Msg) {
+    Write-Log $Msg
+    try {
+        Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue
+        [System.Windows.MessageBox]::Show($Msg, "Hourly Voice Reminder", "OK", "Error") | Out-Null
+    } catch {
+        Write-Host $Msg
+    }
+}
+
+function Show-Info([string]$Msg) {
+    try {
+        Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue
+        [System.Windows.MessageBox]::Show($Msg, "Hourly Voice Reminder", "OK", "Information") | Out-Null
+    } catch {
+        Write-Host $Msg
+    }
+}
+
 function Test-PythonTk {
     param([string]$Exe)
-    if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
+    if (-not $Exe) { return $false }
+    if (-not (Test-Path -LiteralPath $Exe)) { return $false }
+    # Skip Microsoft Store stub
+    if ($Exe -like "*\WindowsApps\*") { return $false }
     try {
-        & $Exe -c "import tkinter" 2>$null | Out-Null
-        return ($LASTEXITCODE -eq 0)
+        $p = Start-Process -FilePath $Exe -ArgumentList @("-c", "import tkinter") `
+            -Wait -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\hvr-out.txt" `
+            -RedirectStandardError "$env:TEMP\hvr-err.txt"
+        return ($p.ExitCode -eq 0)
     } catch {
         return $false
     }
@@ -22,18 +54,32 @@ function Test-PythonTk {
 
 function Get-PythonCandidates {
     $list = New-Object System.Collections.Generic.List[string]
-    $versions = @("Python312", "Python311", "Python313", "Python310")
-    foreach ($v in $versions) {
-        $list.Add("$env:LocalAppData\Programs\Python\$v\pythonw.exe")
-        $list.Add("$env:LocalAppData\Programs\Python\$v\python.exe")
-        $list.Add("${env:ProgramFiles}\Python\$v\pythonw.exe")
-        $list.Add("${env:ProgramFiles}\Python\$v\python.exe")
+    $versions = @("Python312", "Python313", "Python311", "Python310", "Python39")
+    $bases = @(
+        "$env:LocalAppData\Programs\Python",
+        "${env:ProgramFiles}\Python",
+        "${env:ProgramFiles(x86)}\Python"
+    )
+    foreach ($base in $bases) {
+        foreach ($v in $versions) {
+            $list.Add("$base\$v\pythonw.exe")
+            $list.Add("$base\$v\python.exe")
+        }
     }
-    foreach ($cmd in @("pythonw", "python", "py")) {
+    # Also scan LocalAppData\Programs\Python\* for any version folder
+    $prog = "$env:LocalAppData\Programs\Python"
+    if (Test-Path -LiteralPath $prog) {
+        Get-ChildItem -LiteralPath $prog -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $list.Add((Join-Path $_.FullName "pythonw.exe"))
+            $list.Add((Join-Path $_.FullName "python.exe"))
+        }
+    }
+    foreach ($cmd in @("pythonw", "python")) {
         $c = Get-Command $cmd -ErrorAction SilentlyContinue
-        if ($c -and $c.Source) { $list.Add($c.Source) }
+        if ($c -and $c.Source -and ($c.Source -notlike "*\WindowsApps\*")) {
+            $list.Add($c.Source)
+        }
     }
-    # py launcher: try -3
     return $list
 }
 
@@ -42,14 +88,17 @@ function Find-Python {
         if (Test-PythonTk $p) { return $p }
     }
     $py = Get-Command py -ErrorAction SilentlyContinue
-    if ($py) {
+    if ($py -and $py.Source -and ($py.Source -notlike "*\WindowsApps\*")) {
         try {
             $resolved = & py -3 -c "import sys; print(sys.executable)" 2>$null
             if ($resolved) {
-                $exe = $resolved.Trim()
-                $w = [IO.Path]::Combine([IO.Path]::GetDirectoryName($exe), "pythonw.exe")
-                if (Test-PythonTk $w) { return $w }
-                if (Test-PythonTk $exe) { return $exe }
+                $exe = ($resolved | Select-Object -First 1).ToString().Trim()
+                if ($exe -and ($exe -notlike "*\WindowsApps\*")) {
+                    $dir = [IO.Path]::GetDirectoryName($exe)
+                    $w = Join-Path $dir "pythonw.exe"
+                    if (Test-PythonTk $w) { return $w }
+                    if (Test-PythonTk $exe) { return $exe }
+                }
             }
         } catch {}
     }
@@ -57,30 +106,20 @@ function Find-Python {
 }
 
 function Install-Python {
-    Add-Type -AssemblyName PresentationFramework
-    [System.Windows.MessageBox]::Show(
-        "ไม่พบ Python — จะติดตั้ง Python $PythonVersion ให้อัตโนมัติ (ครั้งแรกอาจใช้เวลา 1–3 นาที)`nต้องมีอินเทอร์เน็ต",
-        "Hourly Voice Reminder",
-        "OK",
-        "Information"
-    ) | Out-Null
+    Show-Info "ไม่พบ Python — จะติดตั้ง Python $PythonVersion ให้อัตโนมัติ`nครั้งแรกใช้เวลาประมาณ 1-3 นาที ต้องมีอินเทอร์เน็ต"
 
     $tmp = Join-Path $env:TEMP $InstallerName
-    Write-Host "Downloading Python $PythonVersion ..."
+    Write-Log "Downloading $InstallerUrl"
     try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $InstallerUrl -OutFile $tmp -UseBasicParsing
     } catch {
-        [System.Windows.MessageBox]::Show(
-            "ดาวน์โหลด Python ไม่สำเร็จ:`n$($_.Exception.Message)",
-            "Hourly Voice Reminder",
-            "OK",
-            "Error"
-        ) | Out-Null
+        Show-Error "ดาวน์โหลด Python ไม่สำเร็จ:`n$($_.Exception.Message)`n`nติดตั้งเองได้ที่ https://www.python.org/downloads/`nติ๊ก Add python.exe to PATH และ tcl/tk"
         exit 1
     }
 
-    Write-Host "Installing Python (silent, current user) ..."
-    $args = @(
+    Write-Log "Running installer silently"
+    $argList = @(
         "/quiet",
         "InstallAllUsers=0",
         "PrependPath=1",
@@ -90,51 +129,64 @@ function Install-Python {
         "Include_doc=0",
         "Include_launcher=1",
         "AssociateFiles=0",
-        "Shortcuts=0",
-        "SimpleInstall=1"
+        "Shortcuts=0"
     )
-    $p = Start-Process -FilePath $tmp -ArgumentList $args -Wait -PassThru
+    $p = Start-Process -FilePath $tmp -ArgumentList $argList -Wait -PassThru
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
 
-    if ($p.ExitCode -ne 0) {
-        [System.Windows.MessageBox]::Show(
-            "ติดตั้ง Python ไม่สำเร็จ (exit $($p.ExitCode))`nลองติดตั้งเองจาก https://www.python.org/downloads/ แล้วติ๊ก Add to PATH + tcl/tk",
-            "Hourly Voice Reminder",
-            "OK",
-            "Error"
-        ) | Out-Null
+    if ($null -eq $p -or $p.ExitCode -ne 0) {
+        $code = if ($p) { $p.ExitCode } else { "unknown" }
+        Show-Error "ติดตั้ง Python ไม่สำเร็จ (exit $code)`n`nติดตั้งเองที่ https://www.python.org/downloads/`nติ๊ก Add python.exe to PATH และ tcl/tk"
         exit 1
     }
 
-    # refresh PATH for this process
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                 [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
-$python = Find-Python
-if (-not $python) {
-    Install-Python
-    Start-Sleep -Seconds 2
-    $python = Find-Python
-}
+try {
+    if (Test-Path -LiteralPath $LogPath) {
+        Remove-Item -LiteralPath $LogPath -Force -ErrorAction SilentlyContinue
+    }
 
-if (-not $python) {
-    Add-Type -AssemblyName PresentationFramework
-    [System.Windows.MessageBox]::Show(
-        "ติดตั้งแล้วแต่ยังหา Python+tkinter ไม่เจอ`nลองปิดแล้วเปิดใหม่ หรือรีสตาร์ทเครื่อง แล้วดับเบิลคลิกอีกครั้ง",
-        "Hourly Voice Reminder",
-        "OK",
-        "Warning"
-    ) | Out-Null
+    $main = Join-Path $Root "main.py"
+    if (-not (Test-Path -LiteralPath $main)) {
+        Show-Error "ไม่พบไฟล์ main.py ในโฟลเดอร์:`n$Root`n`nต้องคัดลอกทั้งโฟลเดอร์ hourly-voice-reminder มาด้วย"
+        exit 1
+    }
+
+    $python = Find-Python
+    if (-not $python) {
+        Install-Python
+        Start-Sleep -Seconds 3
+        $python = Find-Python
+    }
+
+    if (-not $python) {
+        Show-Error "ยังหา Python + tkinter ไม่เจอ`nลองปิดแล้วเปิดใหม่ หรือรีสตาร์ทเครื่อง แล้วดับเบิลคลิก OpenApp.bat อีกครั้ง`n`nหรือติดตั้งเอง: https://www.python.org/downloads/"
+        exit 1
+    }
+
+    $dir = [IO.Path]::GetDirectoryName($python)
+    $pythonw = Join-Path $dir "pythonw.exe"
+    if ((Test-Path -LiteralPath $pythonw) -and (Test-PythonTk $pythonw)) {
+        $python = $pythonw
+    }
+
+    Write-Log "Launching: $python $main"
+    # Use ArgumentList as array — avoid quote bugs with Thai paths
+    $proc = Start-Process -FilePath $python -ArgumentList @($main) -WorkingDirectory $Root -PassThru
+    if (-not $proc) {
+        Show-Error "เปิดโปรแกรมไม่สำเร็จ`nPython: $python`nดูรายละเอียดใน launch-error.txt"
+        exit 1
+    }
+    # If it crashes immediately, wait briefly and check
+    Start-Sleep -Milliseconds 800
+    if ($proc.HasExited -and $proc.ExitCode -ne 0) {
+        Show-Error "โปรแกรมปิดทันที (exit $($proc.ExitCode))`nดู launch-error.txt หรือรัน: python main.py ใน Command Prompt เพื่อดู error"
+        exit 1
+    }
+} catch {
+    Show-Error "เกิดข้อผิดพลาด:`n$($_.Exception.Message)`n`nรายละเอียดบันทึกใน launch-error.txt"
     exit 1
 }
-
-# Prefer pythonw (no console) when available
-$dir = [IO.Path]::GetDirectoryName($python)
-$pythonw = Join-Path $dir "pythonw.exe"
-if ((Test-Path -LiteralPath $pythonw) -and (Test-PythonTk $pythonw)) {
-    $python = $pythonw
-}
-
-$main = Join-Path $Root "main.py"
-Start-Process -FilePath $python -ArgumentList "`"$main`"" -WorkingDirectory $Root

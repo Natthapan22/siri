@@ -387,5 +387,32 @@ def main() -> int:
     return 0
 
 
+def _crash_log(exc: BaseException) -> None:
+    log = Path(__file__).with_name("launch-error.txt")
+    try:
+        log.write_text(
+            f"[{datetime.now().isoformat()}] {type(exc).__name__}: {exc}\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    try:
+        import tkinter as _tk
+        from tkinter import messagebox as _mb
+
+        r = _tk.Tk()
+        r.withdraw()
+        _mb.showerror("Hourly Voice Reminder", f"เปิดไม่สำเร็จ:\n{exc}")
+        r.destroy()
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:
+        _crash_log(exc)
+        raise
