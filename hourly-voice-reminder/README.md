@@ -1,98 +1,27 @@
-# hourly-voice-reminder
+# Hourly Voice Reminder
 
-แจ้งเตือนด้วยเสียงทุกช่วงเวลาที่ตั้งไว้  
-รองรับ **macOS** (`say`) และ **Windows** (SAPI / System.Speech)  
-เครื่อง Windows ปลายทางใช้ไฟล์ `.exe` — **ไม่ต้องติดตั้ง Python**
+แจ้งเตือนด้วยเสียงทุก 1 ชั่วโมง — **กดไฟล์เดียวจบ**
 
----
+| เครื่อง | กดไฟล์นี้ |
+|---------|-----------|
+| **Mac** | **`เปิดแอป.command`** |
+| **Windows** | **`เปิดแอป.bat`** |
 
-## สำหรับ User / เครื่อง Windows ปลายทาง
-
-1. ดาวน์โหลด `HourlyVoiceReminder.exe`
-2. ดับเบิลคลิก
-3. โปรแกรมเริ่มทำงาน
-
-ไม่ต้องติดตั้ง Python / pip / อะไรเพิ่ม
-
-- Log อยู่ที่ `logs/hourly-reminder.log` (สร้างอัตโนมัติข้างไฟล์ `.exe`)
-- หยุดโปรแกรม: Task Manager → จบการทำงาน `HourlyVoiceReminder.exe`  
-  หรือถ้าเปิดจากคอนโซลระหว่างพัฒนา: กด `Ctrl+C`
-
-### เปิดตอน Windows startup (ทางเลือก)
-
-1. วาง `HourlyVoiceReminder.exe` และ `install_startup.bat` ในโฟลเดอร์เดียวกัน  
-   (หรือใช้ `.exe` ในโฟลเดอร์ `dist\` หลัง build)
-2. ดับเบิลคลิก `install_startup.bat`
-3. จะสร้าง shortcut ใน Startup — ครั้งถัดไปล็อกอินแล้วโปรแกรมเริ่มเอง
-
-ยกเลิก: ลบ shortcut `HourlyVoiceReminder.lnk` จากโฟลเดอร์ Startup
+หยุด: Mac / หน้าต่างดำ → `Ctrl+C` · Windows ถ้าเป็น `.exe` → Task Manager จบงาน
 
 ---
 
-## สำหรับ Developer / เครื่อง Build
+## Windows ที่ไม่มี Python
 
-### macOS (รันจากซอร์ส)
-
-```bash
-cd hourly-voice-reminder
-python3 main.py
-```
-
-ใช้เสียงระบบผ่านคำสั่ง `say` (แนะนำเสียง Kanya)
-
-### ตั้งค่าใน `main.py`
-
-```python
-REMINDER_MESSAGE = "..."
-INTERVAL_SECONDS = 60 * 60
-SPEAK_ON_START = False
-```
-
-### สร้าง Windows `.exe` (ต้องทำบนเครื่อง Windows ที่มี Python)
-
-1. ติดตั้ง Python จาก https://www.python.org/downloads/  
-   (ติ๊ก Add to PATH)
-2. คัดลอกโฟลเดอร์โปรเจกต์ไปเครื่อง Windows
-3. ดับเบิลคลิก `build_windows.bat`
-4. ได้ไฟล์ที่:
-
-```text
-dist/HourlyVoiceReminder.exe
-```
-
-คำสั่งภายในเทียบเท่า:
-
-```text
-pyinstaller --onefile --noconsole --name HourlyVoiceReminder main.py
-```
-
-ใช้ `--noconsole` เพราะเป็นโปรแกรมพื้นหลัง + เขียน log ลงไฟล์ ไม่ต้องมีหน้าต่างดำ
-
-### โครงสร้าง
-
-```text
-hourly-voice-reminder/
-├── main.py                 # reminder loop
-├── tts.py                  # speak() — macOS / Windows
-├── build_windows.bat       # สร้าง .exe บนเครื่อง build
-├── install_startup.bat     # ทางเลือก: เปิดตอน startup
-├── requirements.txt
-├── README.md
-└── .gitignore
-```
+1. บนเครื่องที่มี Python: กด **`สร้าง.exe.bat`** ครั้งเดียว  
+2. ได้ไฟล์ **`HourlyVoiceReminder.exe`**  
+3. เอาแค่ `.exe` (หรือทั้งโฟลเดอร์แล้วกด `เปิดแอป.bat`) ไปเครื่องอื่น → ดับเบิลคลิก
 
 ---
 
-## ข้อจำกัด Windows Thai TTS
+## เปลี่ยนข้อความ
 
-- ใช้เสียงของ Windows แบบ offline เท่านั้น (ไม่ใช้ cloud API)
-- ถ้าเครื่องมีเสียงภาษาไทย โปรแกรมจะเลือกให้อัตโนมัติ
-- ถ้าไม่มีเสียงไทย จะใช้เสียงเริ่มต้นของระบบ และเขียน warning ลง log  
-  เพิ่มเสียงไทยได้ที่: Settings → Time & language → Speech
+แก้ใน `main.py` บรรทัด `REMINDER_MESSAGE` / `INTERVAL_SECONDS` แล้วบันทึก  
+(ถ้าใช้ `.exe` ต้องกด `สร้าง.exe.bat` ใหม่)
 
----
-
-## หมายเหตุการทดสอบ
-
-- โค้ด TTS / build script ถูกเตรียมให้พร้อม build บน Windows
-- **Windows EXE ยังไม่ได้ถูก execute จริง ถ้ากำลังพัฒนาจาก macOS** — ต้องรัน `build_windows.bat` บน Windows แล้วทดลองดับเบิลคลิก `.exe` บนเครื่องนั้น
+Log: โฟลเดอร์ `logs/hourly-reminder.log`

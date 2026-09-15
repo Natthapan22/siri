@@ -1,5 +1,0 @@
-# No runtime pip packages required.
-# Uses Python standard library only.
-#
-# Build machine (Windows) only — installed by build_windows.bat into .venv:
-#   pyinstaller

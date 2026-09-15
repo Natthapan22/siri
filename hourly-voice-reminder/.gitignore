@@ -4,9 +4,8 @@ __pycache__/
 venv/
 .env
 .DS_Store
-config.json
-launch-error.txt
 build/
 dist/
 *.spec
 logs/
+HourlyVoiceReminder.exe
