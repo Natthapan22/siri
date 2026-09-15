@@ -7,21 +7,21 @@
 | **Mac** | **`เปิดแอป.command`** |
 | **Windows** | **`เปิดแอป.bat`** |
 
-หยุด: Mac / หน้าต่างดำ → `Ctrl+C` · Windows ถ้าเป็น `.exe` → Task Manager จบงาน
+ถ้าเครื่องยังไม่มี Python → **ติดตั้งให้อัตโนมัติ** (ครั้งแรกต้องมีเน็ต รอ 1–3 นาที) แล้วเปิดโปรแกรมเลย
+
+หยุด: `Ctrl+C` (หน้าต่างที่เปิดอยู่) หรือ Task Manager ถ้าเป็น `.exe`
 
 ---
 
-## Windows ที่ไม่มี Python
+## (ทางเลือก) สร้างไฟล์ `.exe` พกพา
 
-1. บนเครื่องที่มี Python: กด **`สร้าง.exe.bat`** ครั้งเดียว  
-2. ได้ไฟล์ **`HourlyVoiceReminder.exe`**  
-3. เอาแค่ `.exe` (หรือทั้งโฟลเดอร์แล้วกด `เปิดแอป.bat`) ไปเครื่องอื่น → ดับเบิลคลิก
+กด **`สร้าง.exe.bat`** ครั้งเดียว → ได้ `HourlyVoiceReminder.exe`  
+เอาไปเครื่องอื่นที่ไม่มี Python ก็ดับเบิลคลิกได้
 
 ---
 
 ## เปลี่ยนข้อความ
 
-แก้ใน `main.py` บรรทัด `REMINDER_MESSAGE` / `INTERVAL_SECONDS` แล้วบันทึก  
-(ถ้าใช้ `.exe` ต้องกด `สร้าง.exe.bat` ใหม่)
+แก้ใน `main.py` → `REMINDER_MESSAGE` / `INTERVAL_SECONDS`
 
-Log: โฟลเดอร์ `logs/hourly-reminder.log`
+Log: `logs/`
