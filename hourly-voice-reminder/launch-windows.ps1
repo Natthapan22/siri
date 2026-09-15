@@ -163,7 +163,7 @@ try {
     }
 
     if (-not $python) {
-        Show-Error "ยังหา Python + tkinter ไม่เจอ`nลองปิดแล้วเปิดใหม่ หรือรีสตาร์ทเครื่อง แล้วดับเบิลคลิก OpenApp.bat อีกครั้ง`n`nหรือติดตั้งเอง: https://www.python.org/downloads/"
+        Show-Error "ยังหา Python + tkinter ไม่เจอ`nลองปิดแล้วเปิดใหม่ หรือรีสตาร์ทเครื่อง แล้วดับเบิลคลิก เปิดแอป.bat อีกครั้ง`n`nหรือติดตั้งเอง: https://www.python.org/downloads/"
         exit 1
     }
 
