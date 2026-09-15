@@ -6,3 +6,7 @@ venv/
 .DS_Store
 config.json
 launch-error.txt
+build/
+dist/
+*.spec
+logs/
