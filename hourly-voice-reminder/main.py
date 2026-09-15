@@ -91,10 +91,29 @@ def save_config(cfg: dict) -> None:
 
 
 def _ps_kwargs() -> dict:
-    kwargs: dict = {"capture_output": True, "text": True}
+    kwargs: dict = {"capture_output": True, "text": True, "timeout": 120}
     if hasattr(subprocess, "CREATE_NO_WINDOW"):
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     return kwargs
+
+
+def _powershell_exe() -> str:
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if candidate.is_file():
+        return str(candidate)
+    found = shutil.which("powershell") or shutil.which("powershell.exe")
+    if found:
+        return found
+    return "powershell.exe"
+
+
+def _cscript_exe() -> str:
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    candidate = Path(root) / "System32" / "cscript.exe"
+    if candidate.is_file():
+        return str(candidate)
+    return shutil.which("cscript") or "cscript.exe"
 
 
 def _speak_macos(text: str) -> None:
@@ -111,36 +130,92 @@ def _speak_macos(text: str) -> None:
             raise RuntimeError(f"say ล้มเหลว: {err or result.returncode}")
 
 
-def _speak_windows(text: str) -> None:
+def _speak_windows_vbs(text: str) -> None:
+    """SAPI via cscript — ทำงานได้ดีใน .exe ที่แพ็กด้วย PyInstaller."""
     global _thai_voice_warned
-    list_script = (
-        "Add-Type -AssemblyName System.Speech; "
-        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-        "$s.GetInstalledVoices() | ForEach-Object { "
-        "$_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture.Name }"
-    )
-    voices = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            list_script,
-        ],
-        **_ps_kwargs(),
-    )
-    raw = voices.stdout or ""
-    has_thai = "th-th" in raw.lower() or any(
-        "|th-" in line.lower() for line in raw.splitlines()
-    )
-    if not has_thai and not _thai_voice_warned:
-        _thai_voice_warned = True
-        LOG.warning(
-            "ไม่มีเสียงภาษาไทยบน Windows — ใช้เสียงเริ่มต้น "
-            "(Settings → Time & language → Speech)"
-        )
+    txt_path = None
+    vbs_path = None
+    try:
+        # ข้อความ UTF-16 LE ให้ VBS อ่านได้
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-16", suffix=".txt", delete=False
+        ) as tf:
+            tf.write(text)
+            txt_path = tf.name
 
+        # VBS: backslash ไม่ต้อง escape — escape แค่เครื่องหมายคำพูด
+        txt_esc = txt_path.replace('"', '""')
+        vbs = f"""Option Explicit
+Dim fso, ts, msg, sapi, voice
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set ts = fso.OpenTextFile("{txt_esc}", 1, False, -1)
+msg = ts.ReadAll
+ts.Close
+Set sapi = CreateObject("SAPI.SpVoice")
+For Each voice In sapi.GetVoices
+  If InStr(1, voice.GetDescription, "Thai", 1) > 0 Then
+    Set sapi.Voice = voice
+    Exit For
+  End If
+  If InStr(1, voice.Id, "410", 1) > 0 Then
+    Set sapi.Voice = voice
+    Exit For
+  End If
+Next
+sapi.Speak msg, 0
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="ascii", suffix=".vbs", delete=False, errors="strict"
+        ) as vf:
+            vf.write(vbs)
+            vbs_path = vf.name
+
+        result = subprocess.run(
+            [_cscript_exe(), "//nologo", "//B", vbs_path],
+            **_ps_kwargs(),
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"SAPI/cscript ล้มเหลว: {err or result.returncode}")
+
+        if not _thai_voice_warned:
+            # เตือนครั้งเดียวถ้าไม่มีเสียงไทย — ตรวจคร่าวๆ ด้วย PowerShell ถ้ามี
+            _thai_voice_warned = True
+            try:
+                check = subprocess.run(
+                    [
+                        _powershell_exe(),
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        (
+                            "Add-Type -AssemblyName System.Speech; "
+                            "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                            "($s.GetInstalledVoices() | "
+                            "Where-Object { $_.VoiceInfo.Culture.Name -like 'th*' }).Count"
+                        ),
+                    ],
+                    **_ps_kwargs(),
+                )
+                count = (check.stdout or "").strip()
+                if count == "0":
+                    LOG.warning(
+                        "ไม่มีเสียงภาษาไทยบน Windows — ใช้เสียงเริ่มต้น "
+                        "(Settings → Time & language → Speech)"
+                    )
+            except Exception:
+                pass
+    finally:
+        for p in (txt_path, vbs_path):
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
+def _speak_windows_powershell(text: str) -> None:
     tmp = tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8-sig", suffix=".txt", delete=False
     )
@@ -148,24 +223,19 @@ def _speak_windows(text: str) -> None:
         tmp.write(text)
         tmp.close()
         path = tmp.name.replace("'", "''")
-        select = ""
-        if has_thai:
-            select = (
-                "$thai = $s.GetInstalledVoices() | "
-                "Where-Object { $_.VoiceInfo.Culture.Name -like 'th*' } | "
-                "Select-Object -First 1; "
-                "if ($thai) { $s.SelectVoice($thai.VoiceInfo.Name) }; "
-            )
         script = (
             "Add-Type -AssemblyName System.Speech; "
             "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            f"{select}"
+            "$thai = $s.GetInstalledVoices() | "
+            "Where-Object { $_.VoiceInfo.Culture.Name -like 'th*' } | "
+            "Select-Object -First 1; "
+            "if ($thai) { $s.SelectVoice($thai.VoiceInfo.Name) }; "
             f"$t = Get-Content -LiteralPath '{path}' -Raw -Encoding UTF8; "
             "$s.Speak($t)"
         )
         result = subprocess.run(
             [
-                "powershell",
+                _powershell_exe(),
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
@@ -176,12 +246,31 @@ def _speak_windows(text: str) -> None:
         )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(f"Windows TTS ล้มเหลว: {err or result.returncode}")
+            raise RuntimeError(f"PowerShell TTS ล้มเหลว: {err or result.returncode}")
     finally:
         try:
             os.unlink(tmp.name)
         except OSError:
             pass
+
+
+def _speak_windows(text: str) -> None:
+    errors: list[str] = []
+    # 1) cscript/SAPI — ชัวร์สุดใน .exe
+    try:
+        _speak_windows_vbs(text)
+        return
+    except Exception as exc:
+        errors.append(f"cscript: {exc}")
+        LOG.warning("Windows TTS cscript failed: %s", exc)
+    # 2) PowerShell fallback
+    try:
+        _speak_windows_powershell(text)
+        return
+    except Exception as exc:
+        errors.append(f"powershell: {exc}")
+        LOG.warning("Windows TTS powershell failed: %s", exc)
+    raise RuntimeError("พูดบน Windows ไม่สำเร็จ — " + " | ".join(errors))
 
 
 def speak(text: str) -> None:
