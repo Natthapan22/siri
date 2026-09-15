@@ -1,25 +1,45 @@
 # Hourly Voice Reminder
 
-แจ้งเตือนด้วยเสียงตามชั่วโมง — **คลิกเดียวจบ**
+แอปแจ้งเตือนด้วยเสียงตามชั่วโมงที่เลือก — **ดับเบิลคลิกแล้วใช้ได้** ไม่ต้องติดตั้ง Python
 
-| เครื่อง | กดไฟล์นี้ |
-|---------|-----------|
-| **Mac** | **`เปิดแอป.command`** |
-| **Windows** | **`เปิดแอป.bat`** |
+## คนใช้ (แนะนำ)
 
-### Windows — ในไฟล์ `.bat` มีคำสั่งติดตั้ง Python อยู่แล้ว
+โหลดจาก **GitHub Releases**:  
+https://github.com/Natthapan22/siri/releases
 
-```bat
-curl -L -o "%TEMP%\python-3.12.7-amd64.exe" https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe
+| เครื่อง | ไฟล์ |
+|---------|------|
+| **Windows** | `HourlyVoiceReminder.exe` → ดับเบิลคลิก |
+| **Mac** | `HourlyVoiceReminder-macOS.zip` → แตกไฟล์ → ดับเบิลคลิก `HourlyVoiceReminder.app` |
 
-"%TEMP%\python-3.12.7-amd64.exe" /quiet InstallAllUsers=0 PrependPath=1 Include_tcltk=1 Include_pip=1 Include_launcher=1 AssociateFiles=0 Shortcuts=0
-```
+ครั้งแรกบน Mac ถ้าบล็อก: คลิกขวา → Open → Open
 
-Flow: ตรวจ Python → ไม่มีก็ติดตั้ง 3.12.7 → เปิดหน้า UI
-
-### ในหน้า UI
+### ในหน้าต่าง
 - กรอกข้อความ + **เทสเสียง**
 - ติ๊กชั่วโมง 00–23 (เริ่มต้นติ๊กครบ)
 - **เริ่ม** / **หยุด**
+- บันทึกอัตโนมัติข้างไฟล์แอป (`config.json`)
 
-Log: `logs/`
+---
+
+## นักพัฒนา — สร้างแอปเอง
+
+โค้ดชุดเดียว `main.py` (UI เหมือนกันทั้ง Mac / Windows)
+
+```bash
+# Mac
+cd hourly-voice-reminder
+./build_mac.sh
+# ได้ dist/HourlyVoiceReminder.app
+
+# Windows
+build_windows.bat
+# ได้ dist\HourlyVoiceReminder.exe
+```
+
+หรือ push tag `v1.0.0` ขึ้น GitHub → Actions จะ build ทั้งสองระบบให้อัตโนมัติ
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```

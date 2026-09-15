@@ -25,8 +25,13 @@ _thai_voice_warned = False
 
 
 def app_dir() -> Path:
+    """Folder for config/logs — next to .exe / next to .app / next to main.py."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        exe = Path(sys.executable).resolve()
+        # macOS .app: .../HourlyVoiceReminder.app/Contents/MacOS/HourlyVoiceReminder
+        if exe.parent.name == "MacOS" and exe.parent.parent.name == "Contents":
+            return exe.parent.parent.parent.parent
+        return exe.parent
     return Path(__file__).resolve().parent
 
 
