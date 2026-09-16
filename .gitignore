@@ -6,3 +6,6 @@ venv/
 .env
 app/
 artifacts/
+hourly-voice-reminder/voices/*.onnx
+hourly-voice-reminder/dist/
+hourly-voice-reminder/build/

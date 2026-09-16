@@ -21,7 +21,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install build deps
-        run: python -m pip install --upgrade pip pyinstaller edge-tts
+        run: python -m pip install --upgrade pip pyinstaller -r requirements.txt
+      - name: Download offline Thai voice model
+        run: python scripts/download_voice.py
       - name: Build exe
         run: python -m PyInstaller --noconfirm --clean HourlyVoiceReminder.spec
       - name: Upload Windows artifact
@@ -41,7 +43,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install build deps
-        run: python -m pip install --upgrade pip pyinstaller edge-tts
+        run: python -m pip install --upgrade pip pyinstaller -r requirements.txt
+      - name: Download offline Thai voice model
+        run: python scripts/download_voice.py
       - name: Build app
         run: python -m PyInstaller --noconfirm --clean HourlyVoiceReminder.spec
       - name: Zip Mac app
@@ -70,8 +74,9 @@ jobs:
             '' \
             '1. Double-click HourlyVoiceReminder.exe' \
             '2. No Python install needed' \
-            '3. Internet required when speaking (online Thai TTS)' \
+            '3. Sound: online Thai TTS first, then bundled offline Piper voice' \
             '4. If SmartScreen appears: More info -> Run anyway' \
+            '5. First speech may be slow while offline model loads' \
             > out/README-Windows.txt
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -85,7 +90,7 @@ jobs:
             ## Windows (no Python needed)
             1. Download `HourlyVoiceReminder.exe`
             2. Double-click to open
-            3. Internet required for Thai TTS when speaking
+            3. Sound order: **online Thai TTS** → **bundled offline Piper** (no internet needed) → Windows SAPI
 
             ## macOS
             Download `HourlyVoiceReminder-macOS.zip` → unzip → open `.app`

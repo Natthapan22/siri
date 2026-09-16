@@ -21,9 +21,12 @@ from tkinter import messagebox, ttk
 DEFAULT_MESSAGE = "แจ้งเรทรีเซลเล่อ"
 DEFAULT_HOURS = list(range(24))
 MAC_VOICE = "Kanya"
-# เสียงไทยจากเน็ต (Microsoft Edge TTS) — ไม่ต้องติดตั้งเสียงบนเครื่อง
+# เสียงไทยจากเน็ต (Microsoft Edge TTS)
 ONLINE_VOICE = "th-TH-PremwadeeNeural"
+# เสียงไทยออฟไลน์ที่แพ็กในแอป (Piper)
+PIPER_VOICE_NAME = "th_TH-mms_female-medium"
 _thai_voice_warned = False
+_piper_voice = None
 APP_TITLE = "แจ้งเรทรีเซลเล่อ"
 
 
@@ -35,6 +38,13 @@ def app_dir() -> Path:
         if exe.parent.name == "MacOS" and exe.parent.parent.name == "Contents":
             return exe.parent.parent.parent.parent
         return exe.parent
+    return Path(__file__).resolve().parent
+
+
+def bundle_dir() -> Path:
+    """Read-only assets inside the frozen package (PyInstaller _MEIPASS)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
     return Path(__file__).resolve().parent
 
 
@@ -123,6 +133,38 @@ def _cscript_exe() -> str:
     return shutil.which("cscript") or "cscript.exe"
 
 
+def _ensure_ssl_certs() -> None:
+    """ให้ edge-tts ใน .exe หา CA bundle ได้ (ปัญหา SSL บ่อยบน Windows frozen)."""
+    try:
+        import certifi
+
+        ca = certifi.where()
+        os.environ.setdefault("SSL_CERT_FILE", ca)
+        os.environ.setdefault("REQUESTS_CA_BUNDLE", ca)
+        os.environ.setdefault("CURL_CA_BUNDLE", ca)
+    except Exception:
+        pass
+
+
+def _play_wav(path: Path) -> None:
+    system = platform.system()
+    if system == "Darwin":
+        afplay = shutil.which("afplay")
+        if not afplay:
+            raise RuntimeError("ไม่พบ afplay")
+        result = subprocess.run([afplay, str(path)], capture_output=True, text=True)
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"afplay ล้มเหลว: {err or result.returncode}")
+        return
+    if system == "Windows":
+        import winsound
+
+        winsound.PlaySound(str(path), winsound.SND_FILENAME)
+        return
+    raise RuntimeError(f"ไม่รองรับเล่น wav: {system}")
+
+
 def _play_mp3(path: Path) -> None:
     """เล่นไฟล์ mp3 ด้วยเครื่องมือที่มีในระบบ (ไม่ต้องติดตั้ง player เพิ่ม)."""
     system = platform.system()
@@ -172,7 +214,8 @@ def _play_mp3(path: Path) -> None:
 
 
 def _speak_online(text: str) -> None:
-    """TTS ผ่านเน็ต (edge-tts) — มีเสียงไทยชัด ไม่พึ่งเสียงในเครื่อง."""
+    """TTS ผ่านเน็ต (edge-tts) — คุณภาพสูง ต้องมีอินเน็ต."""
+    _ensure_ssl_certs()
     try:
         import asyncio
 
@@ -182,9 +225,13 @@ def _speak_online(text: str) -> None:
             "ยังไม่มีแพ็กเกจ edge-tts — รัน: pip install edge-tts"
         ) from exc
 
-    mp3_path = Path(
-        tempfile.mkstemp(prefix="hourly_tts_", suffix=".mp3")[1]
-    )
+    if platform.system() == "Windows":
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+
+    mp3_path = Path(tempfile.mkstemp(prefix="hourly_tts_", suffix=".mp3")[1])
     try:
 
         async def _save() -> None:
@@ -198,6 +245,49 @@ def _speak_online(text: str) -> None:
     finally:
         try:
             mp3_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _get_piper_voice():
+    """โหลดโมเดล Piper ที่แพ็กในแอป (ครั้งเดียวแล้วแคช)."""
+    global _piper_voice
+    if _piper_voice is not None:
+        return _piper_voice
+    try:
+        from piper import PiperVoice
+    except ImportError as exc:
+        raise RuntimeError(
+            "ยังไม่มีแพ็กเกจ piper-tts — รัน: pip install piper-tts"
+        ) from exc
+
+    model = bundle_dir() / "voices" / f"{PIPER_VOICE_NAME}.onnx"
+    if not model.is_file():
+        # dev fallback: voices next to project
+        model = app_dir() / "voices" / f"{PIPER_VOICE_NAME}.onnx"
+    if not model.is_file():
+        raise RuntimeError(f"ไม่พบโมเดลเสียงออฟไลน์: {model.name}")
+
+    _piper_voice = PiperVoice.load(str(model))
+    LOG.info("Loaded offline Piper voice: %s", model.name)
+    return _piper_voice
+
+
+def _speak_offline_piper(text: str) -> None:
+    """TTS ออฟไลน์ — โมเดลไทยแพ็กใน exe ไม่ต้องมีเน็ต."""
+    import wave
+
+    voice = _get_piper_voice()
+    wav_path = Path(tempfile.mkstemp(prefix="hourly_piper_", suffix=".wav")[1])
+    try:
+        with wave.open(str(wav_path), "wb") as wav_file:
+            voice.synthesize_wav(text, wav_file)
+        if wav_path.stat().st_size < 100:
+            raise RuntimeError("สร้าง wav ว่างเปล่า")
+        _play_wav(wav_path)
+    finally:
+        try:
+            wav_path.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -364,7 +454,7 @@ def speak(text: str) -> None:
     system = platform.system()
     errors: list[str] = []
 
-    # Windows: เน็ตก่อน (เสียงไทยชัวร์) → ค่อย fallback SAPI
+    # Windows: เน็ตก่อน → Piper ใน exe → SAPI ในเครื่อง
     if system == "Windows":
         try:
             _speak_online(msg)
@@ -372,6 +462,12 @@ def speak(text: str) -> None:
         except Exception as exc:
             errors.append(f"online: {exc}")
             LOG.warning("Online TTS failed: %s", exc)
+        try:
+            _speak_offline_piper(msg)
+            return
+        except Exception as exc:
+            errors.append(f"piper: {exc}")
+            LOG.warning("Offline Piper failed: %s", exc)
         try:
             _speak_windows_local(msg)
             return
@@ -391,6 +487,12 @@ def speak(text: str) -> None:
             return
         except Exception as exc:
             errors.append(f"online: {exc}")
+            LOG.warning("Online TTS failed: %s", exc)
+        try:
+            _speak_offline_piper(msg)
+            return
+        except Exception as exc:
+            errors.append(f"piper: {exc}")
         raise RuntimeError("พูดไม่สำเร็จ — " + " | ".join(errors))
 
     raise RuntimeError(f"ไม่รองรับ: {system}")
@@ -398,8 +500,8 @@ def speak(text: str) -> None:
 
 def voice_label() -> str:
     if platform.system() == "Darwin":
-        return f"เสียง: {MAC_VOICE} (macOS) · สำรองเน็ต {ONLINE_VOICE}"
-    return f"เสียง: เน็ต {ONLINE_VOICE} (ต้องมีอินเน็ต)"
+        return f"เสียง: {MAC_VOICE} · สำรองเน็ต/Piper ในแอป"
+    return f"เสียง: เน็ต {ONLINE_VOICE} · สำรอง Piper ในแอป (ไม่ต้องมีเน็ต)"
 
 
 def next_selected_hour(

@@ -1,5 +1,8 @@
 # Runtime
 edge-tts>=6.1.0
+piper-tts>=1.2.0
+onnxruntime>=1.16.0
+certifi>=2024.0.0
 
 # Build (optional):
 #   pyinstaller>=6.0

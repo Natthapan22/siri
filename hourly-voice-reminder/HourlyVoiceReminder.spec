@@ -2,16 +2,35 @@
 """PyInstaller spec — Windows onefile .exe / macOS .app (onedir)."""
 
 import sys
+from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
+root = Path(SPECPATH)
 
 edge_datas, edge_binaries, edge_hidden = collect_all("edge_tts")
 try:
     aio_datas, aio_binaries, aio_hidden = collect_all("aiohttp")
 except Exception:
     aio_datas, aio_binaries, aio_hidden = [], [], []
+try:
+    piper_datas, piper_binaries, piper_hidden = collect_all("piper")
+except Exception:
+    piper_datas, piper_binaries, piper_hidden = [], [], []
+try:
+    ort_datas, ort_binaries, ort_hidden = collect_all("onnxruntime")
+except Exception:
+    ort_datas, ort_binaries, ort_hidden = [], [], []
+try:
+    cert_datas, cert_binaries, cert_hidden = collect_all("certifi")
+except Exception:
+    cert_datas, cert_binaries, cert_hidden = [], [], []
+
+voices_dir = root / "voices"
+voice_datas = []
+if voices_dir.is_dir():
+    voice_datas.append((str(voices_dir), "voices"))
 
 hidden = [
     "tkinter",
@@ -20,15 +39,35 @@ hidden = [
     "edge_tts",
     "aiohttp",
     "asyncio",
+    "piper",
+    "onnxruntime",
+    "certifi",
+    "winsound",
     *edge_hidden,
     *aio_hidden,
+    *piper_hidden,
+    *ort_hidden,
+    *cert_hidden,
 ]
 
 a = Analysis(
     ["main.py"],
     pathex=[],
-    binaries=[*edge_binaries, *aio_binaries],
-    datas=[*edge_datas, *aio_datas],
+    binaries=[
+        *edge_binaries,
+        *aio_binaries,
+        *piper_binaries,
+        *ort_binaries,
+        *cert_binaries,
+    ],
+    datas=[
+        *edge_datas,
+        *aio_datas,
+        *piper_datas,
+        *ort_datas,
+        *cert_datas,
+        *voice_datas,
+    ],
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
@@ -43,7 +82,6 @@ a = Analysis(
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 if sys.platform == "darwin":
-    # onedir + .app (recommended on macOS)
     exe = EXE(
         pyz,
         a.scripts,
@@ -79,13 +117,12 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Hourly Voice Reminder",
             "CFBundleDisplayName": "Hourly Voice Reminder",
-            "CFBundleShortVersionString": "1.1.0",
+            "CFBundleShortVersionString": "1.2.0",
             "NSHighResolutionCapable": True,
             "LSBackgroundOnly": False,
         },
     )
 else:
-    # Windows: single .exe
     exe = EXE(
         pyz,
         a.scripts,
