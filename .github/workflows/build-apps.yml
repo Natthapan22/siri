@@ -66,27 +66,28 @@ jobs:
           cp HourlyVoiceReminder-Windows/HourlyVoiceReminder.exe out/
           cp HourlyVoiceReminder-macOS/HourlyVoiceReminder-macOS.zip out/
           printf '%s\n' \
-            'Hourly Voice Reminder — Windows' \
+            'Hourly Voice Reminder - Windows' \
             '' \
-            '1. ดับเบิลคลิก HourlyVoiceReminder.exe' \
-            '2. ไม่ต้องติดตั้ง Python' \
-            '3. ตอนพูดต้องมีอินเน็ต (เสียงไทยจากเน็ต)' \
-            '4. ถ้า Windows เตือน SmartScreen: More info → Run anyway' \
-            > 'out/อ่านก่อนใช้-Windows.txt'      - name: Create GitHub Release
+            '1. Double-click HourlyVoiceReminder.exe' \
+            '2. No Python install needed' \
+            '3. Internet required when speaking (online Thai TTS)' \
+            '4. If SmartScreen appears: More info -> Run anyway' \
+            > out/README-Windows.txt
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             out/HourlyVoiceReminder.exe
             out/HourlyVoiceReminder-macOS.zip
-            out/อ่านก่อนใช้-Windows.txt
+            out/README-Windows.txt
           generate_release_notes: true
           body: |
-            ## วิธีใช้บน Windows (ไม่ต้องมี Python)
-            1. ดาวน์โหลด `HourlyVoiceReminder.exe`
-            2. ดับเบิลคลิกเปิดเลย
-            3. ต้องมีอินเน็ตตอนกดเทสเสียง / ถึงชั่วโมงแจ้งเตือน
+            ## Windows (no Python needed)
+            1. Download `HourlyVoiceReminder.exe`
+            2. Double-click to open
+            3. Internet required for Thai TTS when speaking
 
             ## macOS
-            ดาวน์โหลด `HourlyVoiceReminder-macOS.zip` → แตกไฟล์ → เปิด `.app`
+            Download `HourlyVoiceReminder-macOS.zip` → unzip → open `.app`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
