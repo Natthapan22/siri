@@ -46,6 +46,7 @@ jobs:
         run: python -m pip install --upgrade pip pyinstaller -r requirements.txt
       - name: Download offline Thai voice model
         run: python scripts/download_voice.py
+        continue-on-error: true
       - name: Build app
         run: python -m PyInstaller --noconfirm --clean HourlyVoiceReminder.spec
       - name: Zip Mac app
