@@ -27,6 +27,8 @@ ONLINE_VOICE = "th-TH-PremwadeeNeural"
 PIPER_VOICE_NAME = "th_TH-mms_female-medium"
 _thai_voice_warned = False
 _piper_voice = None
+_tts_ready = threading.Event()
+_piper_primed = False
 APP_TITLE = "แจ้งเรทรีเซลเล่อ"
 
 
@@ -336,6 +338,27 @@ def _speak_online(text: str) -> None:
             pass
 
 
+def _play_silence(seconds: float = 0.25) -> None:
+    """เล่นไฟล์เงียบสั้นๆ — อุ่น audio device บน Windows ก่อนพูดจริง."""
+    import wave
+
+    wav_path = Path(tempfile.mkstemp(prefix="hourly_sil_", suffix=".wav")[1])
+    try:
+        rate = 22050
+        n = int(rate * seconds)
+        with wave.open(str(wav_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(rate)
+            wav_file.writeframes(b"\x00\x00" * n)
+        _play_wav(wav_path)
+    finally:
+        try:
+            wav_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _get_piper_voice():
     """โหลดโมเดล Piper ที่แพ็กในแอป (ครั้งเดียวแล้วแคช)."""
     global _piper_voice
@@ -360,38 +383,13 @@ def _get_piper_voice():
     return _piper_voice
 
 
-def _warmup_piper() -> None:
-    """โหลดโมเดล + สังเคราะห์ทิ้งครั้งหนึ่ง ตอนเปิดแอป — เทสครั้งแรกจะไม่มัว/หน่วง."""
-    import wave
-
-    from piper.config import SynthesisConfig
-
-    try:
-        voice = _get_piper_voice()
-        syn = SynthesisConfig(length_scale=1.55, noise_scale=0.4, normalize_audio=True)
-        wav_path = Path(tempfile.mkstemp(prefix="hourly_warm_", suffix=".wav")[1])
-        try:
-            with wave.open(str(wav_path), "wb") as wav_file:
-                voice.synthesize_wav("ทดสอบ", wav_file, syn_config=syn)
-            LOG.info("Piper warmup done")
-        finally:
-            try:
-                wav_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-    except Exception as exc:
-        LOG.warning("Piper warmup skipped: %s", exc)
-
-
-def _speak_offline_piper(text: str) -> None:
-    """TTS ออฟไลน์ — โมเดลไทยแพ็กใน exe ไม่ต้องมีเน็ต."""
+def _synth_piper_to_wav(text: str, wav_path: Path) -> None:
     import wave
 
     from piper.config import SynthesisConfig
 
     voice = _get_piper_voice()
     msg = _prepare_text(text, for_piper=True)
-    # ช้าลง + ลด noise ให้อ่านชัดขึ้น (แลกกับน้ำเสียงธรรมชาติ)
     syn = SynthesisConfig(
         length_scale=1.55,
         noise_scale=0.35,
@@ -399,13 +397,94 @@ def _speak_offline_piper(text: str) -> None:
         normalize_audio=True,
         volume=1.0,
     )
+    with wave.open(str(wav_path), "wb") as wav_file:
+        voice.synthesize_wav(msg, wav_file, syn_config=syn)
+    if wav_path.stat().st_size < 100:
+        raise RuntimeError("สร้าง wav ว่างเปล่า")
+    _prepend_silence_wav(wav_path, seconds=0.45)
+
+
+def _warmup_tts_stack() -> None:
+    """อุ่นทั้งลำโพง + Piper + เน็ต ก่อนให้ผู้ใช้กดเทส — แก้เสียงรอบแรกมัว รอบสองชัด."""
+    global _piper_primed
+    try:
+        _play_silence(0.3)
+    except Exception as exc:
+        LOG.warning("Audio device warmup failed: %s", exc)
+
+    try:
+        # สังเคราะห์ทิ้ง 2 รอบ (cold graph) โดยไม่เล่นเสียงพูด
+        for _ in range(2):
+            wav_path = Path(tempfile.mkstemp(prefix="hourly_warm_", suffix=".wav")[1])
+            try:
+                _synth_piper_to_wav("ทดสอบ", wav_path)
+            finally:
+                try:
+                    wav_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        _piper_primed = True
+        LOG.info("Piper warmup done (2x synth)")
+    except Exception as exc:
+        LOG.warning("Piper warmup skipped: %s", exc)
+
+    try:
+        # อุ่น SSL + edge-tts โดยดาวน์โหลดแล้วทิ้ง ไม่เล่น
+        _ensure_ssl_certs()
+        import asyncio
+
+        import edge_tts
+
+        if platform.system() == "Windows":
+            try:
+                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            except Exception:
+                pass
+
+        mp3_path = Path(tempfile.mkstemp(prefix="hourly_warm_", suffix=".mp3")[1])
+        try:
+
+            async def _warm_net() -> None:
+                communicate = edge_tts.Communicate(
+                    "ทดสอบ", ONLINE_VOICE, rate="-20%", pitch="+0Hz"
+                )
+                await communicate.save(str(mp3_path))
+
+            asyncio.run(_warm_net())
+            LOG.info("Online TTS warmup done")
+        finally:
+            try:
+                mp3_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception as exc:
+        LOG.warning("Online warmup skipped: %s", exc)
+
+    _tts_ready.set()
+    LOG.info("TTS stack ready")
+
+
+def _speak_offline_piper(text: str) -> None:
+    """TTS ออฟไลน์ — โมเดลไทยแพ็กใน exe ไม่ต้องมีเน็ต."""
+    global _piper_primed
+
+    # ถ้ายังไม่ primed — สังเคราะห์ทิ้ง 1 รอบก่อนเล่นจริง
+    if not _piper_primed:
+        discard = Path(tempfile.mkstemp(prefix="hourly_discard_", suffix=".wav")[1])
+        try:
+            _synth_piper_to_wav(text, discard)
+        except Exception as exc:
+            LOG.warning("Piper prime synth failed: %s", exc)
+        finally:
+            try:
+                discard.unlink(missing_ok=True)
+            except OSError:
+                pass
+        _piper_primed = True
+
     wav_path = Path(tempfile.mkstemp(prefix="hourly_piper_", suffix=".wav")[1])
     try:
-        with wave.open(str(wav_path), "wb") as wav_file:
-            voice.synthesize_wav(msg, wav_file, syn_config=syn)
-        if wav_path.stat().st_size < 100:
-            raise RuntimeError("สร้าง wav ว่างเปล่า")
-        _prepend_silence_wav(wav_path, seconds=0.4)
+        _synth_piper_to_wav(text, wav_path)
         _play_wav(wav_path)
     finally:
         try:
@@ -573,6 +652,10 @@ def speak(text: str) -> str:
     """พูดข้อความ — คืนชื่อช่องทางที่ใช้: online / piper / local / macos."""
     if not text or not str(text).strip():
         return "skip"
+    # รอให้อุ่นเครื่องเสียงเสร็จก่อนพูดจริง (กันรอบแรกมัว)
+    if not _tts_ready.is_set():
+        LOG.info("Waiting for TTS warmup…")
+        _tts_ready.wait(timeout=90)
     msg = str(text)
     system = platform.system()
     errors: list[str] = []
@@ -673,18 +756,33 @@ class ReminderApp:
         ]
 
         self._build_ui()
+        self.test_btn.configure(state=tk.DISABLED)
         self.message_var.trace_add("write", lambda *_: self._schedule_autosave())
         for var in self.hour_vars:
             var.trace_add("write", lambda *_: self._schedule_autosave())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(200, self._bring_to_front)
-        # โหลดเสียงสำรองล่วงหน้า — เทสครั้งแรกไม่โดน cold-start
-        self.root.after(
-            500,
-            lambda: threading.Thread(target=_warmup_piper, daemon=True).start(),
-        )
+        self.status_var.set("กำลังเตรียมเสียง… (รอสักครู่แล้วค่อยเทส)")
+        # อุ่นลำโพง+Piper+เน็ตให้เสร็จก่อน — แก้เสียงรอบแรกมัว รอบสองชัด
+        self.root.after(300, self._start_tts_warmup)
         # คลิกเดียวเปิดมาแล้วเริ่มรอแจ้งเตือนให้อัตโนมัติ
         self.root.after(400, self._auto_start)
+
+    def _start_tts_warmup(self) -> None:
+        def run() -> None:
+            _warmup_tts_stack()
+            self.root.after(0, self._on_tts_ready)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_tts_ready(self) -> None:
+        try:
+            self.test_btn.configure(state=tk.NORMAL)
+        except tk.TclError:
+            return
+        if self._thread and self._thread.is_alive():
+            return
+        self.status_var.set("พร้อมเทสเสียงแล้ว")
 
     def _bring_to_front(self) -> None:
         try:
