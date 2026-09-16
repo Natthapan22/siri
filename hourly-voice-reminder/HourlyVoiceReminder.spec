@@ -117,7 +117,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Hourly Voice Reminder",
             "CFBundleDisplayName": "Hourly Voice Reminder",
-            "CFBundleShortVersionString": "1.2.1",
+            "CFBundleShortVersionString": "1.2.2",
             "NSHighResolutionCapable": True,
             "LSBackgroundOnly": False,
         },

@@ -152,19 +152,37 @@ def _prepare_text(text: str, *, for_piper: bool = False) -> str:
     t = " ".join(str(text).split())
     if not for_piper:
         return t
-    # ช่วยโมเดลออฟไลน์อ่านคำธุรกิจที่พบบ่อยให้ชัดขึ้น
+    # ทำจากวลียาว → สั้น เพื่อไม่ให้ตัดคำผิด
     reps = (
+        ("แจ้งเรทรีเซลเล่อ", "แจ้ง เรท รี เซล เล่อ"),
+        ("ส่งเรทรีเซลเล่อ", "ส่ง เรท รี เซล เล่อ"),
+        ("เรทรีเซลเล่อ", "เรท รี เซล เล่อ"),
+        ("เรทรีเซลเลอร์", "เรท รี เซล เลอร์"),
         ("รีเซลเล่อ", "รี เซล เล่อ"),
         ("รีเซลเลอร์", "รี เซล เลอร์"),
-        ("reseller", "รี เซล เลอร์"),
-        ("เรท", "เรท"),
+        ("เรทรี", "เรท รี"),
     )
     for a, b in reps:
         t = t.replace(a, b)
-    # แยก "แจ้งเรท" → "แจ้ง เรท"
-    t = t.replace("แจ้งเรท", "แจ้ง เรท")
-    t = t.replace("แจ้ง เรท", "แจ้ง เรท")
     return " ".join(t.split())
+
+
+def _prepend_silence_wav(path: Path, seconds: float = 0.35) -> None:
+    """เติมช่วงเงียบนำหน้า — กันพยางค์แรกถูกตัดตอนเล่นบน Windows."""
+    import wave
+
+    with wave.open(str(path), "rb") as src:
+        params = src.getparams()
+        frames = src.readframes(src.getnframes())
+    n_silence = int(params.framerate * seconds) * params.nchannels
+    silence = b"\x00\x00" * n_silence if params.sampwidth == 2 else b"\x00" * (
+        n_silence * params.sampwidth
+    )
+    tmp = path.with_suffix(".pad.wav")
+    with wave.open(str(tmp), "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(silence + frames)
+    tmp.replace(path)
 
 
 def _play_wav(path: Path) -> None:
@@ -272,6 +290,8 @@ def _play_mp3(path: Path) -> None:
 
 def _speak_online(text: str) -> None:
     """TTS ผ่านเน็ต (edge-tts) — คุณภาพสูง ต้องมีอินเน็ต."""
+    import html as html_lib
+
     _ensure_ssl_certs()
     try:
         import asyncio
@@ -289,13 +309,19 @@ def _speak_online(text: str) -> None:
             pass
 
     msg = _prepare_text(text, for_piper=False)
+    # SSML: เว้นจังหวะนำหน้า + อ่านช้า — กันพยางค์แรกหาย/มัว
+    ssml = (
+        '<speak version="1.0" xml:lang="th-TH">'
+        '<break time="400ms"/>'
+        f"{html_lib.escape(msg)}"
+        "</speak>"
+    )
     mp3_path = Path(tempfile.mkstemp(prefix="hourly_tts_", suffix=".mp3")[1])
     try:
 
         async def _save() -> None:
-            # ช้าลงนิดหน่อยให้อ่านไทยชัดขึ้น
             communicate = edge_tts.Communicate(
-                msg, ONLINE_VOICE, rate="-15%", pitch="+0Hz"
+                ssml, ONLINE_VOICE, rate="-20%", pitch="+0Hz"
             )
             await communicate.save(str(mp3_path))
 
@@ -334,6 +360,29 @@ def _get_piper_voice():
     return _piper_voice
 
 
+def _warmup_piper() -> None:
+    """โหลดโมเดล + สังเคราะห์ทิ้งครั้งหนึ่ง ตอนเปิดแอป — เทสครั้งแรกจะไม่มัว/หน่วง."""
+    import wave
+
+    from piper.config import SynthesisConfig
+
+    try:
+        voice = _get_piper_voice()
+        syn = SynthesisConfig(length_scale=1.55, noise_scale=0.4, normalize_audio=True)
+        wav_path = Path(tempfile.mkstemp(prefix="hourly_warm_", suffix=".wav")[1])
+        try:
+            with wave.open(str(wav_path), "wb") as wav_file:
+                voice.synthesize_wav("ทดสอบ", wav_file, syn_config=syn)
+            LOG.info("Piper warmup done")
+        finally:
+            try:
+                wav_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception as exc:
+        LOG.warning("Piper warmup skipped: %s", exc)
+
+
 def _speak_offline_piper(text: str) -> None:
     """TTS ออฟไลน์ — โมเดลไทยแพ็กใน exe ไม่ต้องมีเน็ต."""
     import wave
@@ -344,9 +393,9 @@ def _speak_offline_piper(text: str) -> None:
     msg = _prepare_text(text, for_piper=True)
     # ช้าลง + ลด noise ให้อ่านชัดขึ้น (แลกกับน้ำเสียงธรรมชาติ)
     syn = SynthesisConfig(
-        length_scale=1.45,
-        noise_scale=0.4,
-        noise_w_scale=0.7,
+        length_scale=1.55,
+        noise_scale=0.35,
+        noise_w_scale=0.6,
         normalize_audio=True,
         volume=1.0,
     )
@@ -356,6 +405,7 @@ def _speak_offline_piper(text: str) -> None:
             voice.synthesize_wav(msg, wav_file, syn_config=syn)
         if wav_path.stat().st_size < 100:
             raise RuntimeError("สร้าง wav ว่างเปล่า")
+        _prepend_silence_wav(wav_path, seconds=0.4)
         _play_wav(wav_path)
     finally:
         try:
@@ -527,15 +577,17 @@ def speak(text: str) -> str:
     system = platform.system()
     errors: list[str] = []
 
-    # Windows: เน็ตก่อน → Piper ใน exe → SAPI ในเครื่อง
+    # Windows: เน็ตก่อน (ลอง 2 ครั้ง) → Piper ใน exe → SAPI ในเครื่อง
     if system == "Windows":
-        try:
-            _speak_online(msg)
-            LOG.info("TTS engine=online")
-            return "online"
-        except Exception as exc:
-            errors.append(f"online: {exc}")
-            LOG.warning("Online TTS failed: %s", exc)
+        for attempt in range(2):
+            try:
+                _speak_online(msg)
+                LOG.info("TTS engine=online attempt=%s", attempt + 1)
+                return "online"
+            except Exception as exc:
+                errors.append(f"online#{attempt + 1}: {exc}")
+                LOG.warning("Online TTS failed (%s): %s", attempt + 1, exc)
+                time.sleep(0.4)
         try:
             _speak_offline_piper(msg)
             LOG.info("TTS engine=piper")
@@ -626,6 +678,11 @@ class ReminderApp:
             var.trace_add("write", lambda *_: self._schedule_autosave())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(200, self._bring_to_front)
+        # โหลดเสียงสำรองล่วงหน้า — เทสครั้งแรกไม่โดน cold-start
+        self.root.after(
+            500,
+            lambda: threading.Thread(target=_warmup_piper, daemon=True).start(),
+        )
         # คลิกเดียวเปิดมาแล้วเริ่มรอแจ้งเตือนให้อัตโนมัติ
         self.root.after(400, self._auto_start)
 
