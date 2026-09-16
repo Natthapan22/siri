@@ -18,10 +18,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-DEFAULT_MESSAGE = "ส่งเรทรีเซลเล่อ"
+DEFAULT_MESSAGE = "แจ้งเรทรีเซลเล่อ"
 DEFAULT_HOURS = list(range(24))
 MAC_VOICE = "Kanya"
+# เสียงไทยจากเน็ต (Microsoft Edge TTS) — ไม่ต้องติดตั้งเสียงบนเครื่อง
+ONLINE_VOICE = "th-TH-PremwadeeNeural"
 _thai_voice_warned = False
+APP_TITLE = "แจ้งเรทรีเซลเล่อ"
 
 
 def app_dir() -> Path:
@@ -65,8 +68,9 @@ def load_config() -> dict:
         return cfg
     try:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        # อ่านข้อความตรงตัวจากไฟล์ — ไม่ rewrite
         if isinstance(data.get("message"), str) and data["message"].strip():
-            cfg["message"] = data["message"].strip()
+            cfg["message"] = data["message"]
         hours = data.get("hours")
         if isinstance(hours, list):
             cleaned = sorted(
@@ -78,6 +82,9 @@ def load_config() -> dict:
             )
             if cleaned:
                 cfg["hours"] = cleaned
+        elif "minute" in data:
+            # รองรับ config เก่าของ reseller (minute + ทุกชั่วโมง)
+            cfg["hours"] = list(range(24))
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         pass
     return cfg
@@ -114,6 +121,85 @@ def _cscript_exe() -> str:
     if candidate.is_file():
         return str(candidate)
     return shutil.which("cscript") or "cscript.exe"
+
+
+def _play_mp3(path: Path) -> None:
+    """เล่นไฟล์ mp3 ด้วยเครื่องมือที่มีในระบบ (ไม่ต้องติดตั้ง player เพิ่ม)."""
+    system = platform.system()
+    if system == "Darwin":
+        afplay = shutil.which("afplay")
+        if not afplay:
+            raise RuntimeError("ไม่พบ afplay")
+        result = subprocess.run([afplay, str(path)], capture_output=True, text=True)
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"afplay ล้มเหลว: {err or result.returncode}")
+        return
+
+    if system == "Windows":
+        uri = path.resolve().as_uri().replace("'", "''")
+        script = (
+            "Add-Type -AssemblyName presentationCore; "
+            "$p = New-Object System.Windows.Media.MediaPlayer; "
+            f"$p.Open([Uri]'{uri}'); "
+            "$p.Play(); "
+            "$i = 0; "
+            "while (-not $p.NaturalDuration.HasTimeSpan) { "
+            "  Start-Sleep -Milliseconds 50; $i++; if ($i -gt 200) { break } "
+            "}; "
+            "if ($p.NaturalDuration.HasTimeSpan) { "
+            "  Start-Sleep -Milliseconds ([int]($p.NaturalDuration.TimeSpan.TotalMilliseconds) + 200) "
+            "}; "
+            "$p.Close()"
+        )
+        result = subprocess.run(
+            [
+                _powershell_exe(),
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+            **_ps_kwargs(),
+        )
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"เล่น mp3 ไม่สำเร็จ: {err or result.returncode}")
+        return
+
+    raise RuntimeError(f"ไม่รองรับเล่นเสียง: {system}")
+
+
+def _speak_online(text: str) -> None:
+    """TTS ผ่านเน็ต (edge-tts) — มีเสียงไทยชัด ไม่พึ่งเสียงในเครื่อง."""
+    try:
+        import asyncio
+
+        import edge_tts
+    except ImportError as exc:
+        raise RuntimeError(
+            "ยังไม่มีแพ็กเกจ edge-tts — รัน: pip install edge-tts"
+        ) from exc
+
+    mp3_path = Path(
+        tempfile.mkstemp(prefix="hourly_tts_", suffix=".mp3")[1]
+    )
+    try:
+
+        async def _save() -> None:
+            communicate = edge_tts.Communicate(text, ONLINE_VOICE)
+            await communicate.save(str(mp3_path))
+
+        asyncio.run(_save())
+        if not mp3_path.is_file() or mp3_path.stat().st_size < 100:
+            raise RuntimeError("ดาวน์โหลดเสียงว่างเปล่า (เช็คเน็ต)")
+        _play_mp3(mp3_path)
+    finally:
+        try:
+            mp3_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _speak_macos(text: str) -> None:
@@ -254,16 +340,14 @@ def _speak_windows_powershell(text: str) -> None:
             pass
 
 
-def _speak_windows(text: str) -> None:
+def _speak_windows_local(text: str) -> None:
     errors: list[str] = []
-    # 1) cscript/SAPI — ชัวร์สุดใน .exe
     try:
         _speak_windows_vbs(text)
         return
     except Exception as exc:
         errors.append(f"cscript: {exc}")
         LOG.warning("Windows TTS cscript failed: %s", exc)
-    # 2) PowerShell fallback
     try:
         _speak_windows_powershell(text)
         return
@@ -276,19 +360,46 @@ def _speak_windows(text: str) -> None:
 def speak(text: str) -> None:
     if not text or not str(text).strip():
         return
+    msg = str(text)
     system = platform.system()
+    errors: list[str] = []
+
+    # Windows: เน็ตก่อน (เสียงไทยชัวร์) → ค่อย fallback SAPI
+    if system == "Windows":
+        try:
+            _speak_online(msg)
+            return
+        except Exception as exc:
+            errors.append(f"online: {exc}")
+            LOG.warning("Online TTS failed: %s", exc)
+        try:
+            _speak_windows_local(msg)
+            return
+        except Exception as exc:
+            errors.append(f"local: {exc}")
+        raise RuntimeError("พูดไม่สำเร็จ — " + " | ".join(errors))
+
     if system == "Darwin":
-        _speak_macos(str(text))
-    elif system == "Windows":
-        _speak_windows(str(text))
-    else:
-        raise RuntimeError(f"ไม่รองรับ: {system}")
+        try:
+            _speak_macos(msg)
+            return
+        except Exception as exc:
+            errors.append(f"say: {exc}")
+            LOG.warning("macOS say failed: %s", exc)
+        try:
+            _speak_online(msg)
+            return
+        except Exception as exc:
+            errors.append(f"online: {exc}")
+        raise RuntimeError("พูดไม่สำเร็จ — " + " | ".join(errors))
+
+    raise RuntimeError(f"ไม่รองรับ: {system}")
 
 
 def voice_label() -> str:
     if platform.system() == "Darwin":
-        return f"เสียง: {MAC_VOICE} (macOS)"
-    return "เสียง: Windows SAPI (เลือกไทยอัตโนมัติถ้ามี)"
+        return f"เสียง: {MAC_VOICE} (macOS) · สำรองเน็ต {ONLINE_VOICE}"
+    return f"เสียง: เน็ต {ONLINE_VOICE} (ต้องมีอินเน็ต)"
 
 
 def next_selected_hour(
@@ -310,7 +421,7 @@ def next_selected_hour(
 class ReminderApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Hourly Voice Reminder")
+        self.root.title(APP_TITLE)
         self.root.geometry("460x520+120+80")
         self.root.minsize(420, 480)
 
@@ -320,7 +431,7 @@ class ReminderApp:
         self._save_after_id: str | None = None
 
         self.message_var = tk.StringVar(value=self.cfg["message"])
-        self.status_var = tk.StringVar(value="พร้อม — กดเริ่มเพื่อรอแจ้งเตือน")
+        self.status_var = tk.StringVar(value="กำลังเริ่ม…")
         self.hour_vars = [
             tk.BooleanVar(value=(h in self.cfg["hours"])) for h in range(24)
         ]
@@ -331,6 +442,8 @@ class ReminderApp:
             var.trace_add("write", lambda *_: self._schedule_autosave())
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(200, self._bring_to_front)
+        # คลิกเดียวเปิดมาแล้วเริ่มรอแจ้งเตือนให้อัตโนมัติ
+        self.root.after(400, self._auto_start)
 
     def _bring_to_front(self) -> None:
         try:
@@ -438,7 +551,10 @@ class ReminderApp:
             try:
                 self._set_status(f"กำลังเทสเสียง: {msg}")
                 speak(msg)
-                self._set_status("เทสเสียงเสร็จแล้ว — กดเริ่มเมื่อพร้อม")
+                if self._thread and self._thread.is_alive():
+                    self._set_status("เทสเสียงเสร็จแล้ว — ระบบยังทำงานต่อ")
+                else:
+                    self._set_status("เทสเสียงเสร็จแล้ว — กดเริ่มเมื่อพร้อม")
             except Exception as exc:
                 self.root.after(
                     0, lambda: messagebox.showerror("พูดไม่สำเร็จ", str(exc))
@@ -449,6 +565,14 @@ class ReminderApp:
                 )
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _auto_start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        if not self._selected_hours():
+            self.status_var.set("พร้อม — เลือกชั่วโมงแล้วกดเริ่ม")
+            return
+        self._on_start()
 
     def _on_start(self) -> None:
         cfg = self._current_config()
@@ -551,7 +675,7 @@ def main() -> int:
                 import ctypes
 
                 ctypes.windll.user32.MessageBoxW(
-                    0, f"เปิด UI ไม่สำเร็จ:\n{exc}", "Hourly Voice Reminder", 0x10
+                    0, f"เปิด UI ไม่สำเร็จ:\n{exc}", APP_TITLE, 0x10
                 )
             except Exception:
                 pass

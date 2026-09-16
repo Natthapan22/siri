@@ -20,8 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
+      - name: Install build deps
+        run: python -m pip install --upgrade pip pyinstaller edge-tts
       - name: Build exe
         run: python -m PyInstaller --noconfirm --clean HourlyVoiceReminder.spec
       - name: Upload Windows artifact
@@ -40,8 +40,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
+      - name: Install build deps
+        run: python -m pip install --upgrade pip pyinstaller edge-tts
       - name: Build app
         run: python -m PyInstaller --noconfirm --clean HourlyVoiceReminder.spec
       - name: Zip Mac app
@@ -65,12 +65,28 @@ jobs:
           mkdir -p out
           cp HourlyVoiceReminder-Windows/HourlyVoiceReminder.exe out/
           cp HourlyVoiceReminder-macOS/HourlyVoiceReminder-macOS.zip out/
-      - name: Create GitHub Release
+          printf '%s\n' \
+            'Hourly Voice Reminder — Windows' \
+            '' \
+            '1. ดับเบิลคลิก HourlyVoiceReminder.exe' \
+            '2. ไม่ต้องติดตั้ง Python' \
+            '3. ตอนพูดต้องมีอินเน็ต (เสียงไทยจากเน็ต)' \
+            '4. ถ้า Windows เตือน SmartScreen: More info → Run anyway' \
+            > 'out/อ่านก่อนใช้-Windows.txt'      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             out/HourlyVoiceReminder.exe
             out/HourlyVoiceReminder-macOS.zip
+            out/อ่านก่อนใช้-Windows.txt
           generate_release_notes: true
+          body: |
+            ## วิธีใช้บน Windows (ไม่ต้องมี Python)
+            1. ดาวน์โหลด `HourlyVoiceReminder.exe`
+            2. ดับเบิลคลิกเปิดเลย
+            3. ต้องมีอินเน็ตตอนกดเทสเสียง / ถึงชั่วโมงแจ้งเตือน
+
+            ## macOS
+            ดาวน์โหลด `HourlyVoiceReminder-macOS.zip` → แตกไฟล์ → เปิด `.app`
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

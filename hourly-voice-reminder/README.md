@@ -9,9 +9,10 @@ https://github.com/Natthapan22/siri/releases
 
 | เครื่อง | ไฟล์ |
 |---------|------|
-| **Windows** | `HourlyVoiceReminder.exe` → ดับเบิลคลิก |
+| **Windows** | `HourlyVoiceReminder.exe` → ดับเบิลคลิก (**ไม่ต้องมี Python**) |
 | **Mac** | `HourlyVoiceReminder-macOS.zip` → แตกไฟล์ → ดับเบิลคลิก `HourlyVoiceReminder.app` |
 
+ครั้งแรกบน Windows ถ้า SmartScreen ขึ้น: **More info → Run anyway**  
 ครั้งแรกบน Mac ถ้าบล็อก: คลิกขวา → Open → Open
 
 ### ในหน้าต่าง
@@ -19,6 +20,7 @@ https://github.com/Natthapan22/siri/releases
 - ติ๊กชั่วโมง 00–23 (เริ่มต้นติ๊กครบ)
 - **เริ่ม** / **หยุด**
 - บันทึกอัตโนมัติข้างไฟล์แอป (`config.json`)
+- Windows ใช้เสียงไทยจากเน็ต (ต้องมีอินเน็ตตอนพูด)
 
 ---
 

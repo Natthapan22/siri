@@ -3,14 +3,32 @@
 
 import sys
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
-hidden = ["tkinter", "tkinter.ttk", "tkinter.messagebox"]
+
+edge_datas, edge_binaries, edge_hidden = collect_all("edge_tts")
+try:
+    aio_datas, aio_binaries, aio_hidden = collect_all("aiohttp")
+except Exception:
+    aio_datas, aio_binaries, aio_hidden = [], [], []
+
+hidden = [
+    "tkinter",
+    "tkinter.ttk",
+    "tkinter.messagebox",
+    "edge_tts",
+    "aiohttp",
+    "asyncio",
+    *edge_hidden,
+    *aio_hidden,
+]
 
 a = Analysis(
     ["main.py"],
     pathex=[],
-    binaries=[],
-    datas=[],
+    binaries=[*edge_binaries, *aio_binaries],
+    datas=[*edge_datas, *aio_datas],
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
@@ -61,7 +79,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Hourly Voice Reminder",
             "CFBundleDisplayName": "Hourly Voice Reminder",
-            "CFBundleShortVersionString": "1.0.0",
+            "CFBundleShortVersionString": "1.1.0",
             "NSHighResolutionCapable": True,
             "LSBackgroundOnly": False,
         },
