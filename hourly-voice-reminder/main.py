@@ -139,11 +139,32 @@ def _ensure_ssl_certs() -> None:
         import certifi
 
         ca = certifi.where()
-        os.environ.setdefault("SSL_CERT_FILE", ca)
-        os.environ.setdefault("REQUESTS_CA_BUNDLE", ca)
-        os.environ.setdefault("CURL_CA_BUNDLE", ca)
+        # บังคับเสมอใน frozen — setdefault ไม่พอถ้าค่า env ว่าง/ผิด
+        os.environ["SSL_CERT_FILE"] = ca
+        os.environ["REQUESTS_CA_BUNDLE"] = ca
+        os.environ["CURL_CA_BUNDLE"] = ca
     except Exception:
         pass
+
+
+def _prepare_text(text: str, *, for_piper: bool = False) -> str:
+    """จัดข้อความก่อนพูด — Piper/MMS อ่านคำติดกันไม่ชัด จึงแยกพยางค์เบาๆ."""
+    t = " ".join(str(text).split())
+    if not for_piper:
+        return t
+    # ช่วยโมเดลออฟไลน์อ่านคำธุรกิจที่พบบ่อยให้ชัดขึ้น
+    reps = (
+        ("รีเซลเล่อ", "รี เซล เล่อ"),
+        ("รีเซลเลอร์", "รี เซล เลอร์"),
+        ("reseller", "รี เซล เลอร์"),
+        ("เรท", "เรท"),
+    )
+    for a, b in reps:
+        t = t.replace(a, b)
+    # แยก "แจ้งเรท" → "แจ้ง เรท"
+    t = t.replace("แจ้งเรท", "แจ้ง เรท")
+    t = t.replace("แจ้ง เรท", "แจ้ง เรท")
+    return " ".join(t.split())
 
 
 def _play_wav(path: Path) -> None:
@@ -179,19 +200,54 @@ def _play_mp3(path: Path) -> None:
         return
 
     if system == "Windows":
+        path_lit = str(path.resolve()).replace("'", "''")
+        errors: list[str] = []
+        # 1) Windows Media Player COM — เล่น mp3 บน Windows ได้ชัวร์กว่า MediaPlayer WPF
+        wmp = (
+            f"$wmp = New-Object -ComObject WMPlayer.OCX; "
+            f"$wmp.settings.autoStart = $true; "
+            f"$wmp.URL = '{path_lit}'; "
+            f"$wmp.controls.play(); "
+            f"$i = 0; "
+            f"while (($wmp.playState -ne 3) -and ($i -lt 120)) "
+            f"{{ Start-Sleep -Milliseconds 50; $i++ }}; "
+            f"while ($wmp.playState -eq 3) {{ Start-Sleep -Milliseconds 100 }}; "
+            f"$wmp.close()"
+        )
+        try:
+            result = subprocess.run(
+                [
+                    _powershell_exe(),
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    wmp,
+                ],
+                **_ps_kwargs(),
+            )
+            if result.returncode == 0:
+                return
+            err = (result.stderr or result.stdout or "").strip()
+            errors.append(f"wmp: {err or result.returncode}")
+        except Exception as exc:
+            errors.append(f"wmp: {exc}")
+
+        # 2) WPF MediaPlayer — รอ MediaOpened ก่อน Play
         uri = path.resolve().as_uri().replace("'", "''")
         script = (
             "Add-Type -AssemblyName presentationCore; "
             "$p = New-Object System.Windows.Media.MediaPlayer; "
+            "$opened = $false; "
+            "$p.add_MediaOpened({ $script:opened = $true }); "
             f"$p.Open([Uri]'{uri}'); "
-            "$p.Play(); "
             "$i = 0; "
-            "while (-not $p.NaturalDuration.HasTimeSpan) { "
-            "  Start-Sleep -Milliseconds 50; $i++; if ($i -gt 200) { break } "
+            "while (-not $opened -and $i -lt 200) { "
+            "  Start-Sleep -Milliseconds 50; $i++ "
             "}; "
-            "if ($p.NaturalDuration.HasTimeSpan) { "
-            "  Start-Sleep -Milliseconds ([int]($p.NaturalDuration.TimeSpan.TotalMilliseconds) + 200) "
-            "}; "
+            "if (-not $opened) { throw 'MediaOpened timeout' }; "
+            "$p.Play(); "
+            "Start-Sleep -Milliseconds ([int]($p.NaturalDuration.TimeSpan.TotalMilliseconds) + 300); "
             "$p.Close()"
         )
         result = subprocess.run(
@@ -207,7 +263,8 @@ def _play_mp3(path: Path) -> None:
         )
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(f"เล่น mp3 ไม่สำเร็จ: {err or result.returncode}")
+            errors.append(f"wpf: {err or result.returncode}")
+            raise RuntimeError("เล่น mp3 ไม่สำเร็จ — " + " | ".join(errors))
         return
 
     raise RuntimeError(f"ไม่รองรับเล่นเสียง: {system}")
@@ -231,11 +288,15 @@ def _speak_online(text: str) -> None:
         except Exception:
             pass
 
+    msg = _prepare_text(text, for_piper=False)
     mp3_path = Path(tempfile.mkstemp(prefix="hourly_tts_", suffix=".mp3")[1])
     try:
 
         async def _save() -> None:
-            communicate = edge_tts.Communicate(text, ONLINE_VOICE)
+            # ช้าลงนิดหน่อยให้อ่านไทยชัดขึ้น
+            communicate = edge_tts.Communicate(
+                msg, ONLINE_VOICE, rate="-15%", pitch="+0Hz"
+            )
             await communicate.save(str(mp3_path))
 
         asyncio.run(_save())
@@ -277,11 +338,22 @@ def _speak_offline_piper(text: str) -> None:
     """TTS ออฟไลน์ — โมเดลไทยแพ็กใน exe ไม่ต้องมีเน็ต."""
     import wave
 
+    from piper.config import SynthesisConfig
+
     voice = _get_piper_voice()
+    msg = _prepare_text(text, for_piper=True)
+    # ช้าลง + ลด noise ให้อ่านชัดขึ้น (แลกกับน้ำเสียงธรรมชาติ)
+    syn = SynthesisConfig(
+        length_scale=1.45,
+        noise_scale=0.4,
+        noise_w_scale=0.7,
+        normalize_audio=True,
+        volume=1.0,
+    )
     wav_path = Path(tempfile.mkstemp(prefix="hourly_piper_", suffix=".wav")[1])
     try:
         with wave.open(str(wav_path), "wb") as wav_file:
-            voice.synthesize_wav(text, wav_file)
+            voice.synthesize_wav(msg, wav_file, syn_config=syn)
         if wav_path.stat().st_size < 100:
             raise RuntimeError("สร้าง wav ว่างเปล่า")
         _play_wav(wav_path)
@@ -447,9 +519,10 @@ def _speak_windows_local(text: str) -> None:
     raise RuntimeError("พูดบน Windows ไม่สำเร็จ — " + " | ".join(errors))
 
 
-def speak(text: str) -> None:
+def speak(text: str) -> str:
+    """พูดข้อความ — คืนชื่อช่องทางที่ใช้: online / piper / local / macos."""
     if not text or not str(text).strip():
-        return
+        return "skip"
     msg = str(text)
     system = platform.system()
     errors: list[str] = []
@@ -458,19 +531,22 @@ def speak(text: str) -> None:
     if system == "Windows":
         try:
             _speak_online(msg)
-            return
+            LOG.info("TTS engine=online")
+            return "online"
         except Exception as exc:
             errors.append(f"online: {exc}")
             LOG.warning("Online TTS failed: %s", exc)
         try:
             _speak_offline_piper(msg)
-            return
+            LOG.info("TTS engine=piper")
+            return "piper"
         except Exception as exc:
             errors.append(f"piper: {exc}")
             LOG.warning("Offline Piper failed: %s", exc)
         try:
             _speak_windows_local(msg)
-            return
+            LOG.info("TTS engine=local")
+            return "local"
         except Exception as exc:
             errors.append(f"local: {exc}")
         raise RuntimeError("พูดไม่สำเร็จ — " + " | ".join(errors))
@@ -478,19 +554,22 @@ def speak(text: str) -> None:
     if system == "Darwin":
         try:
             _speak_macos(msg)
-            return
+            LOG.info("TTS engine=macos")
+            return "macos"
         except Exception as exc:
             errors.append(f"say: {exc}")
             LOG.warning("macOS say failed: %s", exc)
         try:
             _speak_online(msg)
-            return
+            LOG.info("TTS engine=online")
+            return "online"
         except Exception as exc:
             errors.append(f"online: {exc}")
             LOG.warning("Online TTS failed: %s", exc)
         try:
             _speak_offline_piper(msg)
-            return
+            LOG.info("TTS engine=piper")
+            return "piper"
         except Exception as exc:
             errors.append(f"piper: {exc}")
         raise RuntimeError("พูดไม่สำเร็จ — " + " | ".join(errors))
@@ -501,7 +580,10 @@ def speak(text: str) -> None:
 def voice_label() -> str:
     if platform.system() == "Darwin":
         return f"เสียง: {MAC_VOICE} · สำรองเน็ต/Piper ในแอป"
-    return f"เสียง: เน็ต {ONLINE_VOICE} · สำรอง Piper ในแอป (ไม่ต้องมีเน็ต)"
+    return (
+        f"เสียง: เน็ต {ONLINE_VOICE} (ช้าลงให้อ่านชัด) "
+        f"· สำรอง Piper ในแอป"
+    )
 
 
 def next_selected_hour(
@@ -652,11 +734,17 @@ class ReminderApp:
         def run() -> None:
             try:
                 self._set_status(f"กำลังเทสเสียง: {msg}")
-                speak(msg)
+                engine = speak(msg)
+                label = {
+                    "online": "เน็ต (ชัด)",
+                    "piper": "ในแอป Piper (สำรอง)",
+                    "local": "เสียง Windows",
+                    "macos": "macOS say",
+                }.get(engine, engine)
                 if self._thread and self._thread.is_alive():
-                    self._set_status("เทสเสียงเสร็จแล้ว — ระบบยังทำงานต่อ")
+                    self._set_status(f"เทสเสร็จ ({label}) — ระบบยังทำงานต่อ")
                 else:
-                    self._set_status("เทสเสียงเสร็จแล้ว — กดเริ่มเมื่อพร้อม")
+                    self._set_status(f"เทสเสร็จ ({label}) — กดเริ่มเมื่อพร้อม")
             except Exception as exc:
                 self.root.after(
                     0, lambda: messagebox.showerror("พูดไม่สำเร็จ", str(exc))
@@ -736,7 +824,8 @@ class ReminderApp:
             try:
                 self._set_status(f"แจ้งเตือน {now.strftime('%H:%M')}: {msg}")
                 LOG.info("Speaking reminder at %s", now.strftime("%H:%M"))
-                speak(msg)
+                engine = speak(msg)
+                LOG.info("Reminder spoke via %s", engine)
             except Exception as exc:
                 self._set_status(f"ผิดพลาด: {exc}")
                 LOG.exception("Speak failed: %s", exc)
