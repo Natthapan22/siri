@@ -3,12 +3,36 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 import urllib.request
 from pathlib import Path
 
 BASE = "https://huggingface.co/tranhuyluyen/piper-voices-thai/resolve/main"
 NAME = "th_TH-mms_female-medium"
 FILES = (f"{NAME}.onnx", f"{NAME}.onnx.json")
+
+
+def _download(url: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    curl = shutil.which("curl")
+    if curl:
+        subprocess.check_call(
+            [
+                curl,
+                "-fL",
+                "--retry",
+                "5",
+                "--retry-delay",
+                "2",
+                "-o",
+                str(dest),
+                url,
+            ]
+        )
+        return
+    urllib.request.urlretrieve(url, dest)
 
 
 def main() -> int:
@@ -21,7 +45,13 @@ def main() -> int:
             continue
         url = f"{BASE}/{name}"
         print(f"download {url}")
-        urllib.request.urlretrieve(url, dest)
+        try:
+            _download(url, dest)
+        except Exception as exc:
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+            print(f"FAILED {name}: {exc}", file=sys.stderr)
+            return 1
         print(f"saved {dest} ({dest.stat().st_size} bytes)")
     return 0
 
